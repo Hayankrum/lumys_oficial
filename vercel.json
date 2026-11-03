@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "rewrites": [
+    {
+      "source": "/sync/:path*",
+      "destination": "/api/sync/:path*"
+    },
+    {
+      "source": "/:path((?!api/|sync/).*)",
+      "destination": "/index.html"
+    }
+  ]
+}
