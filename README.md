@@ -129,8 +129,8 @@ frontend e API compartilham o mesmo domínio.
 Importe o repositório com a raiz do projeto como **Root Directory**. Use
 `npm run build` como comando de build e `dist` como diretório de saída. A
 Vercel hospeda o frontend como arquivos estáticos e executa a API Express em
-`api/[...path].js`; o fallback SPA mantém os links internos funcionando, e as
-rotas `/sync` são encaminhadas para a mesma função.
+`api/index.js`; as rotas `/api/*` e `/sync/*` são encaminhadas para essa função,
+e o fallback SPA mantém os links internos funcionando.
 
 Adicione `DATABASE_URL` nas variáveis de ambiente da Vercel para Production e
 Preview. Use a URL de conexão de um PostgreSQL acessível pela internet (de

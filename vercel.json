@@ -3,7 +3,11 @@
   "rewrites": [
     {
       "source": "/sync/:path*",
-      "destination": "/api/sync/:path*"
+      "destination": "/api?__vercel_path=/sync/:path*"
+    },
+    {
+      "source": "/api/:path*",
+      "destination": "/api?__vercel_path=/api/:path*"
     },
     {
       "source": "/:path((?!api/|sync/).*)",
