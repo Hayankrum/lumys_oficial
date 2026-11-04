@@ -1,6 +1,6 @@
 import './AppLayout.css'
 
-export default function AppLayout({ children, conta, tela, onHome, onList, onProfile, onLogout }) {
+export default function AppLayout({ children, conta, authCarregando, tela, onHome, onList, onProfile, onLogout }) {
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -14,16 +14,31 @@ export default function AppLayout({ children, conta, tela, onHome, onList, onPro
             <button className={`navigation-link${tela === 'lista' ? ' navigation-link--active' : ''}`} type="button" onClick={onList} aria-current={tela === 'lista' ? 'page' : undefined}>Lista</button>
             <button className={`navigation-link${tela === 'perfil' ? ' navigation-link--active' : ''}`} type="button" onClick={onProfile} aria-current={tela === 'perfil' ? 'page' : undefined}>Perfil</button>
           </div>
-          {conta && (
+          {(authCarregando || conta) && (
             <div className="account-actions">
-              <span className="account-email">{conta.email}</span>
-              <button className="account-logout" type="button" onClick={onLogout} aria-label="Sair da conta" title="Sair">
-                <svg viewBox="0 0 24 24" aria-hidden="true">
-                  <path d="M10 17l5-5-5-5M15 12H3" />
-                  <path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" />
-                </svg>
-                <span>Sair</span>
-              </button>
+              {authCarregando && (
+                <span
+                  className="session-status"
+                  role="status"
+                  aria-label="Verificando sessão em segundo plano"
+                  title="Estamos conferindo sua sessão em segundo plano. Você já pode navegar normalmente."
+                >
+                  <span className="session-status-dot" aria-hidden="true" />
+                  <span className="session-status-label">Verificando sessão…</span>
+                </span>
+              )}
+              {conta && (
+                <>
+                  <span className="account-email">{conta.email}</span>
+                  <button className="account-logout" type="button" onClick={onLogout} aria-label="Sair da conta" title="Sair">
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M10 17l5-5-5-5M15 12H3" />
+                      <path d="M12 3h6a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-6" />
+                    </svg>
+                    <span>Sair</span>
+                  </button>
+                </>
+              )}
             </div>
           )}
         </nav>

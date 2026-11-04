@@ -57,6 +57,12 @@
 
 .navigation-link:hover, .navigation-link--active { background: rgb(255 255 255 / 12%); color: white; }
 .account-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
+.session-status { display: inline-flex; align-items: center; gap: 6px; color: rgb(255 255 255 / 72%); font-size: 11px; white-space: nowrap; }
+.session-status-dot { width: 7px; height: 7px; border-radius: 50%; background: #8fd6b4; box-shadow: 0 0 0 0 rgb(143 214 180 / 45%); animation: session-status-pulse 1.6s ease-in-out infinite; }
+@keyframes session-status-pulse {
+  0%, 100% { opacity: .45; box-shadow: 0 0 0 0 rgb(143 214 180 / 40%); }
+  50% { opacity: 1; box-shadow: 0 0 0 4px rgb(143 214 180 / 0%); }
+}
 .account-email { max-width: 220px; overflow: hidden; color: rgb(255 255 255 / 72%); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .account-logout {
   display: inline-flex;
@@ -73,7 +79,13 @@
 }
 .account-logout:hover { background: rgb(255 255 255 / 10%); color: white; }
 .account-logout svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
-.app-sync-status { width: min(1120px, calc(100% - 32px)); margin: 4px auto 0; color: #64736a; font-size: 11px; text-align: right; }
+.app-sync-status { display: flex; width: min(1120px, calc(100% - 32px)); align-items: center; justify-content: flex-end; gap: 6px 12px; margin: 4px auto 0; color: #64736a; font-size: 11px; flex-wrap: wrap; }
+.app-sync-text { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 2px 6px; text-align: right; }
+.app-sync-status--alert .app-sync-text { color: #9a5b32; }
+.app-sync-actions { display: inline-flex; align-items: center; gap: 10px; }
+.app-sync-actions button { min-height: 24px; padding: 0; border: 0; background: none; color: #2f6b52; font-size: 11px; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; cursor: pointer; }
+.app-sync-actions button:hover { color: #1b3a3a; }
+.app-sync-status--alert .app-sync-actions button { color: #8a4b26; }
 
 @media (max-width: 600px) {
   .topbar { height: 62px; padding: 8px; }
@@ -84,6 +96,7 @@
   .navigation-link { min-height: 34px; padding: 0 7px; font-size: 11px; }
   .account-actions { gap: 6px; }
   .account-email { display: none; }
+  .session-status-label { display: none; }
   .account-logout { min-height: 29px; padding: 0 6px; font-size: 10px; }
   .account-logout svg { width: 14px; height: 14px; }
 }

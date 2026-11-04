@@ -1,7 +1,8 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db } from './db'
-import { enfileirarRequisicao, sincronizarFilaApi } from './offlineSync'
+import { enfileirarRequisicao, descartarFilaBloqueada, reenfileirarFilaApi, sincronizarFilaApi } from './offlineSync'
+import { mensagemDeErro } from './erros'
 import AppLayout from './layout/AppLayout'
 import AnswerPage from './pages/AnswerPage'
 import DetailsPage from './pages/DetailsPage'
@@ -74,7 +75,7 @@ function validarFormularioJson(texto) {
   try {
     conteudo = JSON.parse(texto)
   } catch (error) {
-    throw new Error(`JSON inválido: ${error.message}`, { cause: error })
+    throw new Error('O JSON não está no formato correto. Verifique vírgulas, aspas e chaves.', { cause: error })
   }
 
   if (!conteudo || typeof conteudo !== 'object' || Array.isArray(conteudo)) {
@@ -220,14 +221,19 @@ function codigoDoQr(texto) {
 }
 
 async function requisitarApi(url, options = {}) {
-  const response = await fetch(url, {
-    ...options,
-    credentials: 'same-origin',
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-  })
+  let response
+  try {
+    response = await fetch(url, {
+      ...options,
+      credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+    })
+  } catch (error) {
+    throw new Error(mensagemDeErro(error), { cause: error })
+  }
   const body = await response.json().catch(() => ({}))
   if (!response.ok) {
-    const error = new Error(body.erro || 'Não foi possível concluir a operação.')
+    const error = new Error(mensagemDeErro({ status: response.status, message: body.erro }))
     error.status = response.status
     throw error
   }
@@ -259,10 +265,17 @@ async function sincronizarFormulariosDaConta(conta) {
     if (!idsLocais.has(remoto.id)) await db.formularios.put({ ...remoto, contaId: conta.id })
   }
 
+  const respostasRemotas = await requisitarApi('/api/conta/respostas')
+  const idsRespostasRemotas = new Set(respostasRemotas.map((resposta) => resposta.id))
+
   for (const formulario of daConta) {
     const respostasLocais = await db.respostas.where('formularioId').equals(formulario.id).toArray()
     for (const resposta of respostasLocais) {
+      if (idsRespostasRemotas.has(resposta.id)) continue
       const respostaPublica = formulario.publicada && formulario.codigo
+      const chave = `${respostaPublica ? 'resposta-publica' : 'resposta-conta'}:${resposta.id}`
+      const jaNaFila = await db.filaApi.where('chave').equals(chave).first()
+      if (jaNaFila) continue
       await enfileirarRequisicao({
         url: respostaPublica
           ? `/api/formularios/${formulario.codigo}/respostas`
@@ -270,11 +283,10 @@ async function sincronizarFormulariosDaConta(conta) {
         method: 'POST',
         body: JSON.stringify(resposta),
         contaId: conta.id,
-        chave: `${respostaPublica ? 'resposta-publica' : 'resposta-conta'}:${resposta.id}`,
+        chave,
       })
     }
   }
-  const respostasRemotas = await requisitarApi('/api/conta/respostas')
   if (respostasRemotas.length) await db.respostas.bulkPut(respostasRemotas)
   await sincronizarFilaApi(conta.id)
 
@@ -355,12 +367,42 @@ function combinarRespondidos(principais, locais) {
   return [...porCodigo.values()].sort((a, b) => (b.respondidoEm ?? 0) - (a.respondidoEm ?? 0))
 }
 
+function lerContaEmCache() {
+  if (window.localStorage.getItem('lumys:logout-pendente')) return null
+  try {
+    return JSON.parse(window.localStorage.getItem('lumys:conta-cache') ?? 'null')
+  } catch {
+    return null
+  }
+}
+
+const TELAS_COM_FORMULARIO = ['detalhes', 'editar', 'responder', 'enviado', 'respostas']
+
+function lerNavegacaoSalva() {
+  try {
+    const salva = JSON.parse(window.sessionStorage.getItem('lumys:navegacao') ?? 'null')
+    return salva && typeof salva === 'object' ? salva : null
+  } catch {
+    return null
+  }
+}
+
 function App() {
-  const [tela, setTela] = useState(() => codigoDaUrl() ? 'carregando' : 'inicio')
-  const [conta, setConta] = useState(null)
-  const [abaInicio, setAbaInicio] = useState('meus')
+  const [navegacaoInicial] = useState(lerNavegacaoSalva)
+  const [tela, setTela] = useState(() => {
+    if (codigoDaUrl()) return 'carregando'
+    if (!navegacaoInicial) return 'inicio'
+    if (navegacaoInicial.formularioId && TELAS_COM_FORMULARIO.includes(navegacaoInicial.tela)) {
+      return 'carregando'
+    }
+    return ['inicio', 'lista', 'perfil', 'respondidos'].includes(navegacaoInicial.tela)
+      ? navegacaoInicial.tela
+      : 'inicio'
+  })
+  const [conta, setConta] = useState(lerContaEmCache)
+  const [abaInicio, setAbaInicio] = useState(() => navegacaoInicial?.abaInicio === 'respondidos' ? 'respondidos' : 'meus')
   const [questionariosRespondidos, setQuestionariosRespondidos] = useState([])
-  const [authCarregando, setAuthCarregando] = useState(true)
+  const [authCarregando, setAuthCarregando] = useState(() => conta === null)
   const [authModo, setAuthModo] = useState('login')
   const [authEmail, setAuthEmail] = useState('')
   const [authSenha, setAuthSenha] = useState('')
@@ -391,8 +433,10 @@ function App() {
   const formularios = useLiveQuery(() => db.formularios.orderBy('atualizadoEm').reverse().toArray(), [])
   const todasRespostas = useLiveQuery(() => db.respostas.toArray(), [])
   const filaSincronizacao = useLiveQuery(() => db.filaApi.toArray(), []) ?? []
-  const sincronizacoesPendentes = filaSincronizacao.filter((item) => !item.bloqueada).length
-  const sincronizacoesRecusadas = filaSincronizacao.filter((item) => item.bloqueada).length
+  const filaDaConta = filaSincronizacao.filter((item) => !item.contaId || item.contaId === conta?.id)
+  const sincronizacoesPendentes = filaDaConta.filter((item) => !item.bloqueada).length
+  const sincronizacoesRecusadas = filaDaConta.filter((item) => item.bloqueada).length
+  const erroSincronizacaoRecusada = filaDaConta.find((item) => item.bloqueada)?.ultimoErro
   const formulariosDaConta = conta
     ? (formularios ?? []).filter((formulario) => formulario.contaId === conta.id)
     : []
@@ -416,7 +460,7 @@ function App() {
         const armazenados = JSON.parse(window.localStorage.getItem(chave) ?? '[]')
         if (Array.isArray(armazenados)) locais = armazenados
       } catch (error) {
-        if (!cancelado) setErro(`Não foi possível carregar o histórico local de respostas: ${error.message}`)
+        if (!cancelado) setErro(`Não foi possível carregar o histórico local de respostas: ${mensagemDeErro(error)}`)
       }
       if (cancelado) return
       setQuestionariosRespondidos(locais)
@@ -425,7 +469,7 @@ function App() {
           const remotos = await requisitarApi('/api/conta/respondidos')
           if (!cancelado) setQuestionariosRespondidos(combinarRespondidos(remotos, locais))
         } catch (error) {
-          if (!cancelado) setErro(`Não foi possível sincronizar os questionários respondidos: ${error.message}`)
+          if (!cancelado) setErro(`Não foi possível sincronizar os questionários respondidos: ${mensagemDeErro(error)}`)
         }
       }
     })
@@ -437,10 +481,12 @@ function App() {
     const logoutPendente = window.localStorage.getItem('lumys:logout-pendente')
     let contaEmCache = null
     let erroContaCache = ''
-    try {
-      contaEmCache = JSON.parse(window.localStorage.getItem('lumys:conta-cache') ?? 'null')
-    } catch (error) {
-      erroContaCache = `Não foi possível carregar a conta salva neste dispositivo: ${error.message}`
+    if (!logoutPendente) {
+      try {
+        contaEmCache = JSON.parse(window.localStorage.getItem('lumys:conta-cache') ?? 'null')
+      } catch {
+        erroContaCache = 'Não foi possível carregar a conta salva neste dispositivo. Entre novamente.'
+      }
     }
     const verificarSessao = async () => {
       if (erroContaCache) setAuthErro(erroContaCache)
@@ -473,14 +519,18 @@ function App() {
         try {
           await sincronizarFormulariosDaConta(sessao)
         } catch (error) {
-          if (!cancelado) setErro(`Sessão ativa, mas não foi possível sincronizar os formulários: ${error.message}`)
+          if (!cancelado) setErro(`Sessão ativa, mas não foi possível sincronizar os formulários: ${mensagemDeErro(error)}`)
         }
       })
       .catch((error) => {
-        if (!cancelado && !error.status && contaEmCache) {
+        if (cancelado) return
+        if (error.status === 401) {
+          window.localStorage.removeItem('lumys:conta-cache')
+          setConta(null)
+        } else if (!error.status && contaEmCache) {
           setConta(contaEmCache)
-        } else if (error.status !== 401 && !cancelado) {
-          setAuthErro(`Não foi possível verificar a sessão: ${error.message}`)
+        } else if (error.status !== 401) {
+          setAuthErro(mensagemDeErro(error, 'Não foi possível verificar a sessão.'))
         }
       })
       .finally(() => {
@@ -488,6 +538,47 @@ function App() {
       })
     return () => { cancelado = true }
   }, [])
+
+  useEffect(() => {
+    if (tela !== 'carregando' || !navegacaoInicial?.formularioId || codigoDaUrl()) return
+    if (authCarregando) return
+    let cancelado = false
+    const salva = navegacaoInicial
+    Promise.resolve().then(async () => {
+      const formulario = await db.formularios.get(salva.formularioId)
+      if (cancelado) return
+      if (!TELAS_COM_FORMULARIO.includes(salva.tela) || !formulario) {
+        setErro('A página anterior não está mais disponível. Você voltou para o início.')
+        setTela(conta ? 'lista' : 'inicio')
+        return
+      }
+      if (!conta && ['detalhes', 'editar', 'respostas'].includes(salva.tela)) {
+        setTela('lista')
+        return
+      }
+      setFormularioAtivo(formulario)
+      setRascunho(formulario)
+      setSomenteLeitura(Boolean(salva.somenteLeitura))
+      if (salva.tela === 'responder') setRespostas({})
+      setTela(salva.tela)
+    })
+    return () => { cancelado = true }
+  }, [tela, authCarregando, conta, navegacaoInicial])
+
+  useEffect(() => {
+    if (tela === 'carregando') return
+    const estado = {
+      tela,
+      formularioId: TELAS_COM_FORMULARIO.includes(tela) ? formularioAtivo?.id ?? null : null,
+      somenteLeitura,
+      abaInicio,
+    }
+    try {
+      window.sessionStorage.setItem('lumys:navegacao', JSON.stringify(estado))
+    } catch {
+      // Ignora falhas de armazenamento: a navegação continua funcionando sem a restauração.
+    }
+  }, [tela, formularioAtivo?.id, somenteLeitura, abaInicio])
 
   useEffect(() => {
     const sincronizarAoConectar = async () => {
@@ -502,7 +593,7 @@ function App() {
       try {
         await sincronizarFilaApi(contaId)
       } catch (error) {
-        setErro(`Não foi possível processar a fila offline: ${error.message}`)
+        setErro(`Não foi possível processar a fila offline: ${mensagemDeErro(error)}`)
       }
     }
     window.addEventListener('online', sincronizarAoConectar)
@@ -560,7 +651,7 @@ function App() {
         if (atualizarUrl) window.history.pushState(null, '', `#/form/${codigoNormalizado}`)
         return
       }
-      setErro(error instanceof Error ? error.message : 'Não foi possível encontrar o formulário.')
+      setErro(mensagemDeErro(error, 'Não foi possível encontrar o formulário.'))
       setCodigoBusca(codigoNormalizado)
       setTela('inicio')
     }
@@ -578,7 +669,7 @@ function App() {
       await sincronizarFormulariosDaConta(contaAutenticada)
       await sincronizarFilaApi(contaAutenticada.id)
     } catch (error) {
-      setErro(`Login concluído, mas não foi possível sincronizar os formulários: ${error.message}`)
+      setErro(`Login concluído, mas não foi possível sincronizar os formulários: ${mensagemDeErro(error)}`)
     }
   }
 
@@ -593,7 +684,7 @@ function App() {
       })
       await concluirAutenticacao(contaAutenticada)
     } catch (error) {
-      setAuthErro(error instanceof Error ? error.message : 'Não foi possível autenticar.')
+      setAuthErro(mensagemDeErro(error, 'Não foi possível autenticar.'))
     } finally {
       setAuthOcupado(false)
     }
@@ -620,6 +711,36 @@ function App() {
       window.localStorage.removeItem('lumys:logout-pendente')
     } catch {
       setErro('Sessão encerrada neste dispositivo. O servidor encerrará a sessão quando a conexão voltar.')
+    }
+  }
+
+  async function sincronizarPendencias() {
+    if (!navigator.onLine) {
+      setErro('Você está offline. Conecte-se à internet para sincronizar agora.')
+      return
+    }
+    setErro('')
+    try {
+      await reenfileirarFilaApi(conta?.id)
+      await sincronizarFilaApi(conta?.id)
+    } catch (error) {
+      setErro(`Não foi possível sincronizar agora: ${mensagemDeErro(error)}`)
+    }
+  }
+
+  async function descartarPendenciasRecusadas() {
+    const quantidade = sincronizacoesRecusadas
+    if (!quantidade) return
+    const confirmou = window.confirm(
+      `Descartar ${quantidade === 1 ? 'a alteração que não pôde ser enviada' : `as ${quantidade} alterações que não puderam ser enviadas`}? ` +
+      'Elas não serão enviadas ao servidor novamente.',
+    )
+    if (!confirmou) return
+    try {
+      await descartarFilaBloqueada(conta?.id)
+      setErro('')
+    } catch (error) {
+      setErro(`Não foi possível descartar as alterações: ${mensagemDeErro(error)}`)
     }
   }
 
@@ -668,7 +789,7 @@ function App() {
     }).catch((error) => {
       if (encerrado) return
       setScannerAberto(false)
-      setErro(error instanceof Error ? `Não foi possível acessar a câmera: ${error.message}` : 'Não foi possível acessar a câmera.')
+      setErro(mensagemDeErro(error, 'Não foi possível acessar a câmera.'))
     })
     return () => {
       encerrado = true
@@ -716,7 +837,7 @@ function App() {
         chave: `formulario-publico:${formulario.codigo}`,
       })
     } catch (error) {
-      setErro(`Salvo neste dispositivo, mas não foi possível preparar a sincronização: ${error.message}`)
+      setErro(`Salvo neste dispositivo, mas não foi possível preparar a sincronização: ${mensagemDeErro(error)}`)
       return
     }
     const timeout = window.setTimeout(() => {
@@ -741,7 +862,7 @@ function App() {
     try {
       await db.formularios.put(confirmado)
     } catch (error) {
-      setErro(`Não foi possível salvar as alterações neste dispositivo: ${error.message}`)
+      setErro(`Não foi possível salvar as alterações neste dispositivo: ${mensagemDeErro(error)}`)
       setConfirmandoAlteracoes(false)
       return
     }
@@ -775,7 +896,7 @@ function App() {
           ? 'Alterações confirmadas neste dispositivo. A sincronização será concluída quando possível.'
           : '')
     } catch (error) {
-      setErro(`Alterações confirmadas neste dispositivo, mas não foi possível preparar a sincronização: ${error.message}`)
+      setErro(`Alterações confirmadas neste dispositivo, mas não foi possível preparar a sincronização: ${mensagemDeErro(error)}`)
     } finally {
       setConfirmandoAlteracoes(false)
     }
@@ -821,7 +942,7 @@ function App() {
       }
       setErro('')
     } catch (error) {
-      setErro(`Não foi possível publicar o formulário: ${error.message}`)
+      setErro(`Não foi possível publicar o formulário: ${mensagemDeErro(error)}`)
     } finally {
       setPublicando(false)
     }
@@ -841,7 +962,7 @@ function App() {
         })
         await sincronizarFilaApi(conta.id)
       } catch (error) {
-        setErro(`Formulário salvo neste dispositivo, mas não foi possível preparar a sincronização: ${error.message}`)
+        setErro(`Formulário salvo neste dispositivo, mas não foi possível preparar a sincronização: ${mensagemDeErro(error)}`)
       }
     }
     setRascunho(formulario)
@@ -868,7 +989,7 @@ function App() {
       setErro('')
       setJsonAberto(false)
     } catch (error) {
-      setJsonErro(error instanceof Error ? error.message : 'Não foi possível importar o formulário.')
+      setJsonErro(mensagemDeErro(error, 'Não foi possível importar o formulário.'))
     }
   }
 
@@ -900,7 +1021,7 @@ function App() {
       setErro('')
       setTela('editar')
     } catch (error) {
-      setErro(`Não foi possível carregar o formulário para edição: ${error.message}`)
+      setErro(`Não foi possível carregar o formulário para edição: ${mensagemDeErro(error)}`)
     }
   }
 
@@ -912,7 +1033,7 @@ function App() {
     if (conta && formulario.contaId === conta.id) {
       void requisitarApi(`/api/conta/formularios/${formulario.id}/respostas`)
         .then(setRespostasRemotas).catch((error) => {
-          setErro(`Não foi possível carregar as respostas sincronizadas: ${error.message}`)
+          setErro(`Não foi possível carregar as respostas sincronizadas: ${mensagemDeErro(error)}`)
       })
     }
   }
@@ -937,7 +1058,7 @@ function App() {
         })
       }
     } catch (error) {
-      setErro(`Não foi possível preparar a exclusão para sincronização: ${error.message}`)
+      setErro(`Não foi possível preparar a exclusão para sincronização: ${mensagemDeErro(error)}`)
       return
     }
     await db.transaction('rw', db.formularios, db.respostas, async () => {
@@ -1072,7 +1193,7 @@ function App() {
           ? 'Resposta salva neste dispositivo. Será sincronizada quando a conexão estiver disponível.'
           : '')
     } catch (error) {
-      setErro(`Não foi possível salvar a resposta neste dispositivo: ${error.message}`)
+      setErro(`Não foi possível salvar a resposta neste dispositivo: ${mensagemDeErro(error)}`)
       return
     }
     try {
@@ -1095,7 +1216,7 @@ function App() {
       window.localStorage.setItem(chave, JSON.stringify(atualizados))
       setQuestionariosRespondidos((atuais) => combinarRespondidos([respondido], atuais))
     } catch (error) {
-      setErro(`Resposta registrada, mas não foi possível salvar o histórico neste dispositivo: ${error.message}`)
+      setErro(`Resposta registrada, mas não foi possível salvar o histórico neste dispositivo: ${mensagemDeErro(error)}`)
     }
     setRespostaIdPendente(null)
     setTela('enviado')
@@ -1111,7 +1232,7 @@ function App() {
         const remotas = await requisitarApi(`/api/conta/formularios/${formulario.id}/respostas`)
         setRespostasRemotas(remotas)
       } catch (error) {
-        setErro(`Não foi possível sincronizar as respostas compartilhadas: ${error.message}`)
+        setErro(`Não foi possível sincronizar as respostas compartilhadas: ${mensagemDeErro(error)}`)
       }
     }
   }
@@ -1219,6 +1340,7 @@ function App() {
   return (
       <AppLayout
         conta={conta}
+        authCarregando={authCarregando}
         tela={tela}
         onHome={voltarInicio}
         onList={abrirLista}
@@ -1231,29 +1353,33 @@ function App() {
         onLogout={() => void sairDaConta()}
       >
       {(sincronizacoesPendentes > 0 || sincronizacoesRecusadas > 0) && (
-        <p
-          className="app-sync-status"
-          role="status"
-          title={filaSincronizacao.filter((item) => item.bloqueada).map((item) => item.ultimoErro).filter(Boolean).join('\n')}
-        >
-          {sincronizacoesPendentes > 0 && (
-            <span>{sincronizacoesPendentes} {sincronizacoesPendentes === 1 ? 'alteração aguardando sincronização' : 'alterações aguardando sincronização'}</span>
-          )}
-          {sincronizacoesPendentes > 0 && sincronizacoesRecusadas > 0 && ' · '}
-          {sincronizacoesRecusadas > 0 && (
-            <span>
-              {sincronizacoesRecusadas} {sincronizacoesRecusadas === 1 ? 'alteração recusada pelo servidor' : 'alterações recusadas pelo servidor'}
-              {filaSincronizacao.find((item) => item.bloqueada)?.ultimoErro && `: ${filaSincronizacao.find((item) => item.bloqueada).ultimoErro}`}
-            </span>
-          )}
-        </p>
+        <div className={`app-sync-status${sincronizacoesRecusadas > 0 ? ' app-sync-status--alert' : ''}`}>
+          <span
+            className="app-sync-text"
+            role="status"
+            title={filaDaConta.map((item) => item.ultimoErro).filter(Boolean).join('\n') || undefined}
+          >
+            {sincronizacoesPendentes > 0 && (
+              <span>{sincronizacoesPendentes} {sincronizacoesPendentes === 1 ? 'alteração aguardando envio' : 'alterações aguardando envio'}</span>
+            )}
+            {sincronizacoesPendentes > 0 && sincronizacoesRecusadas > 0 && ' · '}
+            {sincronizacoesRecusadas > 0 && (
+              <span>
+                {sincronizacoesRecusadas} {sincronizacoesRecusadas === 1 ? 'alteração não pôde ser enviada' : 'alterações não puderam ser enviadas'}
+                {erroSincronizacaoRecusada && `: ${erroSincronizacaoRecusada}`}
+              </span>
+            )}
+          </span>
+          <span className="app-sync-actions">
+            <button type="button" onClick={() => void sincronizarPendencias()}>Tentar novamente</button>
+            {sincronizacoesRecusadas > 0 && (
+              <button type="button" onClick={() => void descartarPendenciasRecusadas()}>Descartar</button>
+            )}
+          </span>
+        </div>
       )}
 
-      {authCarregando && !['responder', 'enviado'].includes(tela) && (
-        <section className="auth-page"><div className="auth-card"><p>Verificando sua sessão…</p></div></section>
-      )}
-
-      {!authCarregando && !conta && tela === 'lista' && (
+      {!conta && tela === 'lista' && (
         <section className="auth-page">
           <div className="auth-card">
             <div className="auth-mark"><img src="/lumys-logo.svg" alt="" /></div>
@@ -1292,7 +1418,7 @@ function App() {
 
       {tela === 'perfil' && <ProfilePage conta={conta} erro={erro} imagemQr={imagemQrPlataforma} onBack={voltarInicio} />}
 
-      {!authCarregando && tela === 'inicio' && (
+      {tela === 'inicio' && (
         <HomePage
           codigoBusca={codigoBusca}
           setCodigoBusca={setCodigoBusca}
