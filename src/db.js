@@ -46,3 +46,13 @@ db.version(5).stores({
   respostas: 'id, formularioId, criadoEm',
   filaApi: '++seq, chave, contaId',
 })
+
+db.version(6).stores({
+  tarefas: 'id, criadaEm, atualizadaEm',
+  outbox: '++seq',
+  meta: 'chave',
+  formularios: 'id, codigo, contaId, atualizadoEm',
+  respostas: 'id, formularioId, criadoEm',
+  filaApi: '++seq, chave, contaId',
+  formulariosExcluidos: 'id, codigo, contaId, excluidoEm',
+})

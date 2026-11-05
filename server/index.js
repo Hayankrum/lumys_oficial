@@ -201,6 +201,21 @@ app.get('/api/conta/formularios', autenticar, async (req, res) => {
   }
 })
 
+app.get('/api/conta/formularios/excluidos', autenticar, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `select id, excluido_em from formularios_conta_excluidos
+       where conta_id = $1
+       order by excluido_em desc`,
+      [req.conta.id]
+    )
+    res.json(rows.map((row) => ({ id: row.id, excluidoEm: Number(row.excluido_em) })))
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ erro: 'Não foi possível carregar as exclusões da conta.' })
+  }
+})
+
 app.get('/api/conta/respostas', autenticar, async (req, res) => {
   try {
     const { rows } = await pool.query(
@@ -272,6 +287,19 @@ app.put('/api/conta/formularios/:id', autenticar, async (req, res) => {
     return res.status(400).json({ erro: 'Dados inválidos para sincronizar o formulário.' })
   }
   try {
+    const excluido = await pool.query(
+      `select 1 from formularios_conta_excluidos where conta_id = $1 and id = $2
+       union all
+       select 1 from formularios_publicos_excluidos where codigo = $3
+       limit 1`,
+      [req.conta.id, req.params.id, typeof formulario.codigo === 'string' ? formulario.codigo : '']
+    )
+    if (excluido.rowCount) {
+      return res.status(409).json({
+        erro: 'Este formulário foi excluído e não pode mais ser sincronizado.',
+        codigo: 'excluido',
+      })
+    }
     const result = await pool.query(
       `insert into formularios_conta (conta_id, id, formulario, atualizado_em)
        values ($1,$2,$3,$4)
@@ -292,12 +320,25 @@ app.put('/api/conta/formularios/:id', autenticar, async (req, res) => {
 
 app.delete('/api/conta/formularios/:id', autenticar, async (req, res) => {
   if (!uuidValido(req.params.id)) return res.status(400).json({ erro: 'Identificador de formulário inválido.' })
+  const client = await pool.connect()
   try {
-    await pool.query('delete from formularios_conta where conta_id = $1 and id = $2', [req.conta.id, req.params.id])
+    await client.query('begin')
+    await client.query(
+      `insert into formularios_conta_excluidos (conta_id, id, excluido_em)
+       values ($1,$2,$3)
+       on conflict (conta_id, id) do update set
+         excluido_em = greatest(formularios_conta_excluidos.excluido_em, excluded.excluido_em)`,
+      [req.conta.id, req.params.id, Date.now()]
+    )
+    await client.query('delete from formularios_conta where conta_id = $1 and id = $2', [req.conta.id, req.params.id])
+    await client.query('commit')
     res.json({ ok: true })
   } catch (error) {
+    await client.query('rollback')
     console.error(error)
     res.status(500).json({ erro: 'Não foi possível excluir o formulário da conta.' })
+  } finally {
+    client.release()
   }
 })
 
@@ -400,6 +441,19 @@ app.put('/api/formularios/:codigo', autenticar, async (req, res) => {
   }
 
   try {
+    const excluido = await pool.query(
+      `select 1 from formularios_publicos_excluidos where codigo = $1
+       union all
+       select 1 from formularios_conta_excluidos where conta_id = $2 and id = $3
+       limit 1`,
+      [codigo, req.conta.id, id]
+    )
+    if (excluido.rowCount) {
+      return res.status(409).json({
+        erro: 'Este formulário foi excluído e não pode ser publicado novamente com este código.',
+        codigo: 'excluido',
+      })
+    }
     const { rows } = await pool.query(
       `insert into formularios_publicos
          (codigo, id, titulo, descricao, perguntas, token_hash, atualizado_em, conta_id)
@@ -463,9 +517,17 @@ app.delete('/api/formularios/:codigo', autenticar, async (req, res) => {
   }
   try {
     const result = await pool.query(
-      `delete from formularios_publicos
-       where codigo = $1 and (conta_id = $2 or (conta_id is null and token_hash = $3))`,
-      [codigo, req.conta.id, hashToken(token)]
+      `with removido as (
+         delete from formularios_publicos
+         where codigo = $1 and (conta_id = $2 or (conta_id is null and token_hash = $3))
+         returning codigo
+       )
+       insert into formularios_publicos_excluidos (codigo, excluido_em)
+       select codigo, $4 from removido
+       on conflict (codigo) do update set
+         excluido_em = greatest(formularios_publicos_excluidos.excluido_em, excluded.excluido_em)
+       returning codigo`,
+      [codigo, req.conta.id, hashToken(token), Date.now()]
     )
     if (!result.rowCount) return res.status(404).json({ erro: 'Formulário não encontrado ou acesso não autorizado.' })
     res.json({ ok: true })
@@ -673,6 +735,14 @@ async function criarTabelas() {
       atualizado_em bigint not null,
       primary key (conta_id, id)
     );
+    create table if not exists formularios_conta_excluidos (
+      conta_id uuid not null references contas(id) on delete cascade,
+      id uuid not null,
+      excluido_em bigint not null,
+      primary key (conta_id, id)
+    );
+    create index if not exists formularios_conta_excluidos_conta_idx
+      on formularios_conta_excluidos (conta_id, excluido_em desc);
     create table if not exists respostas_conta (
       id uuid not null,
       conta_id uuid not null references contas(id) on delete cascade,
@@ -694,6 +764,10 @@ async function criarTabelas() {
       token_hash char(64) not null,
       atualizado_em bigint not null,
       conta_id uuid references contas(id) on delete set null
+    );
+    create table if not exists formularios_publicos_excluidos (
+      codigo varchar(16) primary key,
+      excluido_em bigint not null
     );
     alter table formularios_publicos
       add column if not exists conta_id uuid references contas(id) on delete set null;

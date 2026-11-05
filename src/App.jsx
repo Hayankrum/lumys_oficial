@@ -240,13 +240,124 @@ async function requisitarApi(url, options = {}) {
   return body
 }
 
+async function aplicarExclusoesLocais(contaId) {
+  const exclusoes = await db.formulariosExcluidos.toArray()
+  for (const exclusao of exclusoes) {
+    if (exclusao.contaId && exclusao.contaId !== contaId) continue
+    await db.transaction('rw', db.formularios, db.respostas, db.filaApi, async () => {
+      await db.formularios.delete(exclusao.id)
+      await db.respostas.where('formularioId').equals(exclusao.id).delete()
+      const chaves = new Set([`formulario-conta:${exclusao.id}`])
+      if (exclusao.codigo) chaves.add(`formulario-publico:${exclusao.codigo}`)
+      const pendentes = await db.filaApi.toArray()
+      const descartar = pendentes.filter((item) => {
+        if (chaves.has(item.chave)) return true
+        if (!item.chave?.startsWith('formulario-publico:') || !item.body) return false
+        try {
+          return JSON.parse(item.body)?.id === exclusao.id
+        } catch {
+          return false
+        }
+      }).map((item) => item.seq)
+      if (descartar.length) await db.filaApi.bulkDelete(descartar)
+    })
+  }
+}
+
+async function importarExclusoesPendentes(conta) {
+  const pendentes = await db.filaApi.toArray()
+  for (const item of pendentes) {
+    if (!item.chave?.startsWith('excluir-conta:')) continue
+    if (item.contaId && item.contaId !== conta.id) continue
+    const id = item.chave.slice('excluir-conta:'.length)
+    if (!id || await db.formulariosExcluidos.get(id)) continue
+    const local = await db.formularios.get(id)
+    await db.formulariosExcluidos.put({
+      id,
+      codigo: local?.codigo ?? null,
+      tokenProprietario: local?.tokenProprietario ?? null,
+      excluidoEm: item.criadoEm ?? Date.now(),
+      contaId: conta.id,
+    })
+  }
+}
+
 async function sincronizarFormulariosDaConta(conta) {
+  await importarExclusoesPendentes(conta)
+  let excluidosRemotos = []
+  let exclusoesDisponiveis = true
+  try {
+    excluidosRemotos = await requisitarApi('/api/conta/formularios/excluidos')
+    if (!Array.isArray(excluidosRemotos)) {
+      excluidosRemotos = []
+      exclusoesDisponiveis = false
+    }
+  } catch (error) {
+    // Compatibilidade com um servidor antigo que ainda não expõe as exclusões.
+    if (error.status !== 404) throw error
+    exclusoesDisponiveis = false
+  }
+  const remotos = await requisitarApi('/api/conta/formularios')
+
+  const exclusoesLocais = (await db.formulariosExcluidos.toArray())
+    .filter((item) => !item.contaId || item.contaId === conta.id)
+  const porIdExcluido = new Map(exclusoesLocais.map((item) => [item.id, item]))
+
+  for (const remoto of excluidosRemotos) {
+    if (porIdExcluido.has(remoto.id)) continue
+    const local = await db.formularios.get(remoto.id)
+    const exclusao = {
+      id: remoto.id,
+      codigo: local?.codigo ?? null,
+      tokenProprietario: local?.tokenProprietario ?? null,
+      excluidoEm: Number(remoto.excluidoEm) || Date.now(),
+      contaId: conta.id,
+    }
+    await db.formulariosExcluidos.put(exclusao)
+    porIdExcluido.set(exclusao.id, exclusao)
+  }
+
+  // Uma exclusão vale para todos os dispositivos: remove a cópia local e
+  // descarta envios pendentes que poderiam recriar o formulário no servidor.
+  await aplicarExclusoesLocais(conta.id)
+
+  // Reenvia exclusões que ainda não chegaram ao servidor.
+  if (exclusoesDisponiveis) {
+    const idsExcluidosNoServidor = new Set(excluidosRemotos.map((item) => item.id))
+    for (const exclusao of porIdExcluido.values()) {
+      if (exclusao.contaId !== conta.id) continue
+      if (!idsExcluidosNoServidor.has(exclusao.id)) {
+        const chaveConta = `excluir-conta:${exclusao.id}`
+        if (!(await db.filaApi.where('chave').equals(chaveConta).first())) {
+          await enfileirarRequisicao({
+            url: `/api/conta/formularios/${exclusao.id}`,
+            method: 'DELETE',
+            contaId: conta.id,
+            chave: chaveConta,
+          })
+        }
+        if (exclusao.codigo && exclusao.tokenProprietario) {
+          const chavePublica = `excluir-publico:${exclusao.codigo}`
+          if (!(await db.filaApi.where('chave').equals(chavePublica).first())) {
+            await enfileirarRequisicao({
+              url: `/api/formularios/${exclusao.codigo}`,
+              method: 'DELETE',
+              headers: { 'x-owner-token': exclusao.tokenProprietario },
+              chave: chavePublica,
+            })
+          }
+        }
+      }
+    }
+  }
+
   const locais = await db.formularios.toArray()
   const daConta = locais.filter((formulario) => !formulario.contaId || formulario.contaId === conta.id)
-  const remotos = await requisitarApi('/api/conta/formularios')
   const porIdRemoto = new Map(remotos.map((formulario) => [formulario.id, formulario]))
+  const idsExcluidos = new Set(porIdExcluido.keys())
 
   for (const local of daConta) {
+    if (idsExcluidos.has(local.id)) continue
     const formularioLocal = { ...local, contaId: conta.id }
     const remoto = porIdRemoto.get(local.id)
     if (!remoto || formularioLocal.atualizadoEm > remoto.atualizadoEm) {
@@ -260,8 +371,9 @@ async function sincronizarFormulariosDaConta(conta) {
     }
   }
 
-  const idsLocais = new Set(daConta.map((formulario) => formulario.id))
+  const idsLocais = new Set(daConta.filter((formulario) => !idsExcluidos.has(formulario.id)).map((formulario) => formulario.id))
   for (const remoto of remotos) {
+    if (idsExcluidos.has(remoto.id)) continue
     if (!idsLocais.has(remoto.id)) await db.formularios.put({ ...remoto, contaId: conta.id })
   }
 
@@ -269,6 +381,7 @@ async function sincronizarFormulariosDaConta(conta) {
   const idsRespostasRemotas = new Set(respostasRemotas.map((resposta) => resposta.id))
 
   for (const formulario of daConta) {
+    if (idsExcluidos.has(formulario.id)) continue
     const respostasLocais = await db.respostas.where('formularioId').equals(formulario.id).toArray()
     for (const resposta of respostasLocais) {
       if (idsRespostasRemotas.has(resposta.id)) continue
@@ -288,6 +401,8 @@ async function sincronizarFormulariosDaConta(conta) {
     }
   }
   if (respostasRemotas.length) await db.respostas.bulkPut(respostasRemotas)
+  // Reaplica exclusões que possam ter sido criadas durante esta sincronização.
+  await aplicarExclusoesLocais(conta.id)
   await sincronizarFilaApi(conta.id)
 
   return db.formularios.where('contaId').equals(conta.id).toArray()
@@ -1040,7 +1155,19 @@ function App() {
 
   async function excluirFormulario(formulario) {
     if (!window.confirm(`Excluir "${formulario.titulo}" e todas as respostas?`)) return
+    const timeout = sincronizacaoRef.current.get(formulario.id)
+    if (timeout) {
+      window.clearTimeout(timeout)
+      sincronizacaoRef.current.delete(formulario.id)
+    }
     try {
+      const chavesDeEnvio = new Set([`formulario-conta:${formulario.id}`])
+      if (formulario.codigo) chavesDeEnvio.add(`formulario-publico:${formulario.codigo}`)
+      const enviosPendentes = await db.filaApi.toArray()
+      const descartar = enviosPendentes
+        .filter((item) => chavesDeEnvio.has(item.chave))
+        .map((item) => item.seq)
+      if (descartar.length) await db.filaApi.bulkDelete(descartar)
       if (formulario.publicada) {
         await enfileirarRequisicao({
           url: `/api/formularios/${formulario.codigo}`,
@@ -1061,7 +1188,14 @@ function App() {
       setErro(`Não foi possível preparar a exclusão para sincronização: ${mensagemDeErro(error)}`)
       return
     }
-    await db.transaction('rw', db.formularios, db.respostas, async () => {
+    await db.transaction('rw', db.formularios, db.respostas, db.formulariosExcluidos, async () => {
+      await db.formulariosExcluidos.put({
+        id: formulario.id,
+        codigo: formulario.codigo ?? null,
+        tokenProprietario: formulario.tokenProprietario ?? null,
+        excluidoEm: Date.now(),
+        contaId: conta?.id ?? formulario.contaId ?? null,
+      })
       await db.formularios.delete(formulario.id)
       await db.respostas.where('formularioId').equals(formulario.id).delete()
     })

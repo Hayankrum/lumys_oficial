@@ -54,7 +54,7 @@ export default function ListPage({
                   >
                     <button className="form-card-open" type="button" onClick={() => onOpenDetails(formulario)} aria-label={`Ver detalhes de ${formulario.titulo || 'Questionário sem título'}`} />
                     <div className="form-card-content">
-                      <div className="form-card-art"><img src="/lumys-mark.svg" alt="" /></div>
+                      <div className="form-card-art"><img src="/lumys-logo.svg" alt="" /></div>
                       <div className="form-card-body">
                         <h3>{formulario.titulo || 'Questionário sem título'}</h3>
                         <p>{formulario.descricao || 'Sem descrição'}</p>
