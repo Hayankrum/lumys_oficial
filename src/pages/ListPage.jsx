@@ -125,7 +125,6 @@ export default function ListPage({
           )}
         </>
       )}
-      <p className="local-note">Rascunhos ficam neste dispositivo. Publique um formulário para compartilhar por código ou QR.</p>
     </section>
   )
 }

@@ -76,8 +76,11 @@ h1, h2, h3 { font-family: Manrope, 'Segoe UI', sans-serif; }
 }
 
 .button:hover { transform: translateY(-1px); }
+.button:disabled { opacity: .62; cursor: not-allowed; transform: none; }
 .button--primary { background: var(--brand); color: white; }
 .button--primary:hover { background: var(--brand-dark); }
+.button--danger { background: #b93831; color: white; }
+.button--danger:hover { background: #9f2d27; }
 .button--quiet { border-color: var(--line); background: white; color: #505867; }
 .button--quiet:hover { border-color: #c7ccd2; background: #f6f7f7; }
 .button--small { min-height: 34px; padding: 0 12px; font-size: 12px; }
@@ -148,7 +151,6 @@ h1, h2, h3 { font-family: Manrope, 'Segoe UI', sans-serif; }
 .empty-responses > span img { width: 32px; height: 32px; object-fit: contain; }
 .empty-home h2, .empty-responses h2 { margin: 0 0 8px; font-size: 19px; }
 .empty-home p, .empty-responses p { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
-.local-note { margin: 25px 0; color: #9399a4; font-size: 11px; text-align: center; }
 
 .auth-page { display: grid; min-height: calc(100vh - 73px); place-items: center; padding: 35px 18px; background: radial-gradient(ellipse at 50% 15%, #e5f0ea 0, #f0f7f3 46%); }
 .auth-card { width: min(430px, 100%); padding: 34px; border: 1px solid var(--line); border-radius: 16px; background: white; box-shadow: 0 16px 55px rgb(34 40 52 / 7%); }
@@ -272,6 +274,13 @@ h1, h2, h3 { font-family: Manrope, 'Segoe UI', sans-serif; }
 .json-textarea { resize: vertical; }
 .json-error { color: #b93831; }
 .json-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 14px; }
+.confirm-modal { width: min(440px, 100%); padding: 24px; }
+.confirm-modal-icon { display: grid; width: 42px; height: 42px; place-items: center; margin: 0 auto 14px; border-radius: 12px; background: #fff0ef; color: #b93831; }
+.confirm-modal-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
+.confirm-modal h2 { margin: 0 0 8px; font-size: 19px; letter-spacing: -.4px; text-align: center; }
+.confirm-modal p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.confirm-modal strong { color: var(--ink); overflow-wrap: anywhere; }
+.confirm-modal .json-actions { justify-content: center; margin-top: 20px; }
 
 .editor-page { padding-bottom: 60px; }
 .editor-toolbar, .responses-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 22px 0; }
@@ -460,6 +469,7 @@ select.answer-input { border: 1px solid #dfe1e6; border-radius: 7px; padding: 9p
   .about-layout { grid-template-columns: minmax(0, 1fr); }
   .about-info-card { padding: 22px 19px; }
   .json-modal { padding: 16px; }
+  .confirm-modal { padding: 20px 17px; }
   .json-textarea { min-height: 190px; padding: 10px; font-size: 10px; }
   .scale-editor-numbers, .scale-editor-labels { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
   .scale-result-summary { flex-wrap: wrap; }

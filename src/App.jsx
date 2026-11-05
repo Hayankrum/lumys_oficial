@@ -542,6 +542,8 @@ function App() {
   const [codigoBusca, setCodigoBusca] = useState('')
   const [confirmandoAlteracoes, setConfirmandoAlteracoes] = useState(false)
   const [publicando, setPublicando] = useState(false)
+  const [formularioParaExcluir, setFormularioParaExcluir] = useState(null)
+  const [excluindoFormulario, setExcluindoFormulario] = useState(false)
   const scannerVideo = useRef(null)
   const sincronizacaoRef = useRef(new Map())
   const jsonModo = 'substituir'
@@ -694,6 +696,15 @@ function App() {
       // Ignora falhas de armazenamento: a navegação continua funcionando sem a restauração.
     }
   }, [tela, formularioAtivo?.id, somenteLeitura, abaInicio])
+
+  useEffect(() => {
+    if (!formularioParaExcluir) return undefined
+    const fecharComEsc = (event) => {
+      if (event.key === 'Escape' && !excluindoFormulario) setFormularioParaExcluir(null)
+    }
+    window.addEventListener('keydown', fecharComEsc)
+    return () => window.removeEventListener('keydown', fecharComEsc)
+  }, [formularioParaExcluir, excluindoFormulario])
 
   useEffect(() => {
     const sincronizarAoConectar = async () => {
@@ -1153,8 +1164,16 @@ function App() {
     }
   }
 
+  function solicitarExclusao(formulario) {
+    if (!formulario || excluindoFormulario) return
+    setErro('')
+    setFormularioParaExcluir(formulario)
+  }
+
   async function excluirFormulario(formulario) {
-    if (!window.confirm(`Excluir "${formulario.titulo}" e todas as respostas?`)) return
+    if (!formulario || excluindoFormulario) return
+    setExcluindoFormulario(true)
+    setErro('')
     const timeout = sincronizacaoRef.current.get(formulario.id)
     if (timeout) {
       window.clearTimeout(timeout)
@@ -1186,25 +1205,33 @@ function App() {
       }
     } catch (error) {
       setErro(`Não foi possível preparar a exclusão para sincronização: ${mensagemDeErro(error)}`)
+      setExcluindoFormulario(false)
       return
     }
-    await db.transaction('rw', db.formularios, db.respostas, db.formulariosExcluidos, async () => {
-      await db.formulariosExcluidos.put({
-        id: formulario.id,
-        codigo: formulario.codigo ?? null,
-        tokenProprietario: formulario.tokenProprietario ?? null,
-        excluidoEm: Date.now(),
-        contaId: conta?.id ?? formulario.contaId ?? null,
+    try {
+      await db.transaction('rw', db.formularios, db.respostas, db.formulariosExcluidos, async () => {
+        await db.formulariosExcluidos.put({
+          id: formulario.id,
+          codigo: formulario.codigo ?? null,
+          tokenProprietario: formulario.tokenProprietario ?? null,
+          excluidoEm: Date.now(),
+          contaId: conta?.id ?? formulario.contaId ?? null,
+        })
+        await db.formularios.delete(formulario.id)
+        await db.respostas.where('formularioId').equals(formulario.id).delete()
       })
-      await db.formularios.delete(formulario.id)
-      await db.respostas.where('formularioId').equals(formulario.id).delete()
-    })
-    if (formularioAtivo?.id === formulario.id) {
-      setFormularioAtivo(null)
-      setTela('lista')
+      if (formularioAtivo?.id === formulario.id) {
+        setFormularioAtivo(null)
+        setTela('lista')
+      }
+      setFormularioParaExcluir(null)
+      if (navigator.onLine) await sincronizarFilaApi(conta?.id)
+    } catch (error) {
+      setErro(`Não foi possível excluir o formulário: ${mensagemDeErro(error)}`)
+      setFormularioParaExcluir(null)
+    } finally {
+      setExcluindoFormulario(false)
     }
-    setErro('')
-    if (navigator.onLine) await sincronizarFilaApi(conta?.id)
   }
 
   function atualizarPergunta(id, alteracoes) {
@@ -1578,7 +1605,7 @@ function App() {
           onEdit={editarFormulario}
           onAnswer={iniciarResposta}
           onResults={visualizarRespostas}
-          onDelete={excluirFormulario}
+          onDelete={solicitarExclusao}
         />
       )}
 
@@ -1602,7 +1629,7 @@ function App() {
           onPublish={() => void publicarFormulario(formularioAtivo)}
           onResults={() => void visualizarRespostas(formularioAtivo)}
           onEdit={() => editarFormulario(formularioAtivo)}
-          onDelete={() => void excluirFormulario(formularioAtivo)}
+          onDelete={() => solicitarExclusao(formularioAtivo)}
           onCopyLink={() => void copiarLinkPublico(formularioAtivo)}
         />
       )}
@@ -1831,6 +1858,47 @@ function App() {
             onBack={abrirLista}
           />
         </Suspense>
+      )}
+
+      {formularioParaExcluir && (
+        <div className="json-modal-overlay" onMouseDown={(event) => {
+          if (event.target === event.currentTarget && !excluindoFormulario) setFormularioParaExcluir(null)
+        }}>
+          <section
+            className="json-modal confirm-modal"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="confirm-delete-title"
+            aria-describedby="confirm-delete-description"
+          >
+            <div className="confirm-modal-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3" /></svg>
+            </div>
+            <h2 id="confirm-delete-title">Excluir formulário?</h2>
+            <p id="confirm-delete-description">
+              O formulário <strong>{formularioParaExcluir.titulo || 'Questionário sem título'}</strong> e todas as respostas dele serão removidos permanentemente. Esta ação não pode ser desfeita.
+            </p>
+            <div className="json-actions">
+              <button
+                className="button button--quiet"
+                type="button"
+                onClick={() => setFormularioParaExcluir(null)}
+                disabled={excluindoFormulario}
+                autoFocus
+              >
+                Cancelar
+              </button>
+              <button
+                className="button button--danger"
+                type="button"
+                onClick={() => void excluirFormulario(formularioParaExcluir)}
+                disabled={excluindoFormulario}
+              >
+                {excluindoFormulario ? 'Excluindo…' : 'Excluir'}
+              </button>
+            </div>
+          </section>
+        </div>
       )}
 
       {jsonAberto && tela === 'editar' && (
