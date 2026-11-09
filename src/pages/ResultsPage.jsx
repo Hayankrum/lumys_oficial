@@ -106,6 +106,7 @@ function GraficoResultado({ dados, tipo }) {
 
 export default function ResultsPage({
   formulario,
+  ehDono = false,
   respostas,
   erro,
   tipos,
@@ -113,7 +114,6 @@ export default function ResultsPage({
   agruparRespostasPorDia,
   contarOpcoes,
   GraficoBarras,
-  onBack,
 }) {
   const [tipoGrafico, setTipoGrafico] = useState('barras')
   const temPerguntasQuantitativas = formulario.perguntas.some((pergunta) =>
@@ -122,17 +122,13 @@ export default function ResultsPage({
 
   return (
     <section className="responses-page">
-      <div className="responses-toolbar">
-        <button className="back-button-quiet" type="button" onClick={onBack}>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h12" /></svg>
-          Voltar
-        </button>
-        {respostas.length > 0 && (
+      {ehDono && respostas.length > 0 && (
+        <div className="responses-toolbar">
           <button className="button button--small button--quiet" type="button" onClick={() => exportarCsv(formulario, respostas)}>
             Exportar CSV
           </button>
-        )}
-      </div>
+        </div>
+      )}
       <div className="responses-heading">
         <p className="eyebrow">PAINEL DE RESULTADOS</p>
         <h1>{formulario.titulo}</h1>

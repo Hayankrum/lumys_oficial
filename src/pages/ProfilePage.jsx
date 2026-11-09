@@ -1,4 +1,4 @@
-export default function ProfilePage({ conta, erro, imagemQr, onBack }) {
+export default function ProfilePage({ conta, erro, imagemQr }) {
   const nomeUsuario = conta?.nome || conta?.email?.split('@')[0]?.replace(/[._-]+/g, ' ')
   const nomeExibicao = nomeUsuario
     ? nomeUsuario.replace(/\b\p{L}/gu, (letra) => letra.toLocaleUpperCase('pt-BR'))
@@ -6,10 +6,6 @@ export default function ProfilePage({ conta, erro, imagemQr, onBack }) {
 
   return (
     <section className="about-page">
-      <button className="back-button-quiet" type="button" onClick={onBack}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h12" /></svg>
-        Voltar
-      </button>
       {erro && <p className="form-error" role="alert">{erro}</p>}
       <div className="about-heading">
         <p className="eyebrow">PERFIL DA PLATAFORMA</p>

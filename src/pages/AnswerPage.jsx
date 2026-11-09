@@ -4,16 +4,11 @@ export default function AnswerPage({
   erro,
   renderizarCampo,
   somenteLeitura = false,
-  onBack,
   onSubmit,
   onAnsweredHistory,
 }) {
   return (
     <section className="respond-page">
-      <button className="back-button-quiet back-button" type="button" onClick={onBack}>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h12" /></svg>
-        Voltar
-      </button>
       {enviado ? (
         <div className="submitted-card">
           <span className="submitted-mark">✓</span>
@@ -22,10 +17,6 @@ export default function AnswerPage({
           {erro && <p className="form-error" role="alert">{erro}</p>}
           <div className="submitted-actions">
             <button className="button button--primary" type="button" onClick={onAnsweredHistory}>Ver questionários respondidos</button>
-            <button className="back-button-quiet" type="button" onClick={onBack}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h12" /></svg>
-              Voltar
-            </button>
           </div>
         </div>
       ) : (

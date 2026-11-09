@@ -100,17 +100,20 @@ export default function ListPage({
           {questionariosRespondidos.length ? (
             <div className="form-grid">
               {questionariosRespondidos.map((formulario) => (
-                <article className="form-card" key={formulario.codigo}>
-                  <div className="form-card-art"><span>✓</span></div>
-                  <div className="form-card-body">
-                    <h3>{formulario.titulo || 'Questionário sem título'}</h3>
-                    <p>{formulario.descricao || 'Sem descrição'}</p>
-                    <div className="form-card-meta">
-                      <span>{formulario.perguntas?.length ?? 0} perguntas</span>
-                      <span>Respondido em {new Date(formulario.respondidoEm).toLocaleDateString('pt-BR')}</span>
-                    </div>
-                    <div className="form-card-actions">
-                      <button className="button button--small button--quiet" type="button" onClick={() => onAnswer(formulario)}>Responder novamente</button>
+                <article className="form-card form-card--clickable" key={formulario.codigo}>
+                  <button className="form-card-open" type="button" onClick={() => onOpenDetails(formulario)} aria-label={`Ver detalhes de ${formulario.titulo || 'Questionário sem título'}`} />
+                  <div className="form-card-content">
+                    <div className="form-card-art"><span>✓</span></div>
+                    <div className="form-card-body">
+                      <h3>{formulario.titulo || 'Questionário sem título'}</h3>
+                      <p>{formulario.descricao || 'Sem descrição'}</p>
+                      <div className="form-card-meta">
+                        <span>{formulario.perguntas?.length ?? 0} perguntas</span>
+                        <span>Respondido em {new Date(formulario.respondidoEm).toLocaleDateString('pt-BR')}</span>
+                      </div>
+                      <div className="form-card-actions">
+                        <button className="button button--small button--quiet" type="button" onClick={() => onAnswer(formulario)}>Responder novamente</button>
+                      </div>
                     </div>
                   </div>
                 </article>

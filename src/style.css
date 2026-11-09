@@ -202,10 +202,6 @@ h1, h2, h3 { font-family: Manrope, 'Segoe UI', sans-serif; }
 .detail-action svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
 .detail-delete { border: 1px solid #f1d8d5; background: #fff8f7; color: #a64b44; }
 .detail-delete:hover { border-color: #e8bbb6; background: #fff0ef; color: #a32f26; }
-.back-button-quiet { display: inline-flex; min-height: 34px; align-items: center; gap: 6px; padding: 0 8px; border: 0; border-radius: 8px; background: transparent; color: #71847b; font-size: 12px; cursor: pointer; }
-.back-button-quiet:hover { background: #f1f2f4; color: var(--brand-dark); }
-.back-button-quiet svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
-.back-button { margin-bottom: 14px; }
 .detail-layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; gap: 20px; }
 .detail-main { display: grid; gap: 16px; }
 .detail-overview, .detail-questions, .detail-share-card { padding: 25px; border: 1px solid var(--line); border-radius: 12px; background: white; }

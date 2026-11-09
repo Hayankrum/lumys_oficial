@@ -568,6 +568,11 @@ function App() {
   ).values()].sort((a, b) => b.criadoEm - a.criadoEm)
 
   const contaId = conta?.id
+  const ehDonoDoFormularioAtivo = Boolean(
+    conta && formularioAtivo &&
+    (formularioAtivo.contaId === conta.id ||
+      (formulariosDaConta ?? []).some((item) => item.id === formularioAtivo.id)),
+  )
   useEffect(() => {
     let cancelado = false
     Promise.resolve().then(async () => {
@@ -1577,7 +1582,7 @@ function App() {
         </section>
       )}
 
-      {tela === 'perfil' && <ProfilePage conta={conta} erro={erro} imagemQr={imagemQrPlataforma} onBack={voltarInicio} />}
+      {tela === 'perfil' && <ProfilePage conta={conta} erro={erro} imagemQr={imagemQrPlataforma} />}
 
       {tela === 'inicio' && (
         <HomePage
@@ -1616,6 +1621,7 @@ function App() {
       {conta && tela === 'detalhes' && formularioAtivo && (
         <DetailsPage
           formulario={formularioAtivo}
+          ehDono={ehDonoDoFormularioAtivo}
           respostasRemotas={respostasRemotas}
           todasRespostas={todasRespostas}
           tipos={TIPOS}
@@ -1623,7 +1629,6 @@ function App() {
           imagemQr={imagemQr}
           mensagemPartilha={mensagemPartilha}
           publicando={publicando}
-          onHome={abrirLista}
           onPreview={() => iniciarResposta(formularioAtivo, true)}
           onAnswer={() => iniciarResposta(formularioAtivo)}
           onPublish={() => void publicarFormulario(formularioAtivo)}
@@ -1636,10 +1641,6 @@ function App() {
 
       {conta && tela === 'json' && jsonAberto && (
         <section className="json-page">
-          <button className="back-button-quiet back-button" type="button" onClick={() => jsonModo === 'substituir' ? setTela('editar') : abrirLista()}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h12" /></svg>
-            Voltar
-          </button>
           <div className="json-intro">
             <p className="eyebrow">{jsonModo === 'substituir' ? 'EDIÇÃO AUTOMATIZADA' : 'CRIAÇÃO AUTOMATIZADA'}</p>
             <h1>{jsonModo === 'substituir' ? 'Importar JSON para este formulário' : 'Criar formulário via JSON'}</h1>
@@ -1693,10 +1694,6 @@ function App() {
       {conta && tela === 'editar' && rascunho && (
         <section className="editor-page">
           <div className="editor-toolbar">
-            <button className="back-button-quiet" type="button" onClick={abrirLista}>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h12" /></svg>
-              Voltar
-            </button>
             <span className={`save-status${erro ? ' save-status--error' : ''}`} role={erro ? 'alert' : undefined}>
               {erro || (alteracoesPendentes ? 'Alterações aguardando confirmação' : 'Sem alterações pendentes')}
             </span>
@@ -1798,7 +1795,6 @@ function App() {
           erro={erro}
           renderizarCampo={renderizarCampo}
           somenteLeitura={somenteLeitura}
-          onBack={() => conta ? abrirLista() : voltarInicio()}
           onSubmit={(event) => void enviarResposta(event)}
           onAnsweredHistory={() => {
             setAbaInicio(conta ? 'respondidos' : 'meus')
@@ -1809,10 +1805,6 @@ function App() {
 
       {!conta && tela === 'respondidos' && (
         <section className="home-page">
-          <button className="back-button-quiet" type="button" onClick={voltarInicio}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h12" /></svg>
-            Voltar
-          </button>
           {erro && <p className="form-error home-error" role="alert">{erro}</p>}
           <div className="section-heading">
             <h1>Questionários respondidos</h1>
@@ -1848,6 +1840,7 @@ function App() {
         <Suspense fallback={<section className="responses-page"><p>Carregando resultados…</p></section>}>
           <ResultsPage
             formulario={formularioAtivo}
+            ehDono={ehDonoDoFormularioAtivo}
             respostas={respostasParaExibir}
             erro={erro}
             tipos={TIPOS}
@@ -1855,7 +1848,6 @@ function App() {
             agruparRespostasPorDia={agruparRespostasPorDia}
             contarOpcoes={contarOpcoes}
             GraficoBarras={GraficoBarras}
-            onBack={abrirLista}
           />
         </Suspense>
       )}

@@ -1,5 +1,6 @@
 export default function DetailsPage({
   formulario,
+  ehDono = false,
   respostasRemotas,
   todasRespostas,
   tipos,
@@ -7,7 +8,6 @@ export default function DetailsPage({
   imagemQr,
   mensagemPartilha,
   publicando,
-  onHome,
   onPreview,
   onAnswer,
   onPublish,
@@ -27,10 +27,6 @@ export default function DetailsPage({
   return (
     <section className="detail-page">
       <div className="detail-toolbar">
-        <button className="back-button-quiet" type="button" onClick={onHome}>
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 18-6-6 6-6M9 12h12" /></svg>
-          Voltar
-        </button>
         <div className="detail-toolbar-actions">
           <button className="button button--small button--quiet detail-action" type="button" onClick={onPreview}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2.5 12s3.3-7 9.5-7 9.5 7 9.5 7-3.3 7-9.5 7-9.5-7-9.5-7Z" /><circle cx="12" cy="12" r="3" /></svg>
@@ -40,14 +36,18 @@ export default function DetailsPage({
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 19V9m7 10V5m7 14v-7" /></svg>
             Resultados
           </button>
-          <button className="button button--small button--primary detail-action" type="button" onClick={onEdit}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19 8a2.1 2.1 0 0 0-3-3L5 16l-1 4Z" /></svg>
-            Editar
-          </button>
-          <button className="button button--small detail-action detail-delete" type="button" aria-label={`Excluir ${formulario.titulo}`} onClick={onDelete}>
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3" /></svg>
-            Excluir
-          </button>
+          {ehDono && (
+            <>
+              <button className="button button--small button--primary detail-action" type="button" onClick={onEdit}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4-.8L19 8a2.1 2.1 0 0 0-3-3L5 16l-1 4Z" /></svg>
+                Editar
+              </button>
+              <button className="button button--small detail-action detail-delete" type="button" aria-label={`Excluir ${formulario.titulo}`} onClick={onDelete}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M5 7l1 14h12l1-14M9 7V4h6v3" /></svg>
+                Excluir
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -57,14 +57,14 @@ export default function DetailsPage({
             <p className="eyebrow">DETALHES DO QUESTIONÁRIO</p>
             <h1>{formulario.titulo || 'Questionário sem título'}</h1>
             <p className="detail-description">{formulario.descricao || 'Este questionário não tem descrição.'}</p>
-            {formulario.publicada ? (
-              <button className="button button--primary detail-answer-button" type="button" onClick={onAnswer}>
-                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
-                Responder formulário
-              </button>
-            ) : (
+            {(ehDono && !formulario.publicada) || (!ehDono && !formulario.publica && !formulario.publicada) ? (
               <button className="button button--primary detail-answer-button" type="button" onClick={onPublish} disabled={publicando}>
                 {publicando ? 'Publicando…' : 'Publicar formulário'}
+              </button>
+            ) : (
+              <button className="button button--primary detail-answer-button" type="button" onClick={onAnswer}>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" /></svg>
+                {ehDono ? 'Responder formulário' : 'Responder novamente'}
               </button>
             )}
             <div className="detail-stats">
