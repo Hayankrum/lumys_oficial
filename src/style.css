@@ -4,6 +4,7 @@
   font-family: 'DM Sans', 'Segoe UI', sans-serif;
   color: #1b3a3a;
   background: #f0f7f3;
+  color-scheme: light;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
@@ -20,9 +21,15 @@
 
 * { box-sizing: border-box; }
 
+html, body, #root {
+  min-height: 100%;
+  background-color: #f0f7f3;
+}
+
 body {
   min-width: 320px;
   min-height: 100vh;
+  min-height: 100dvh;
   margin: 0;
 }
 
@@ -34,7 +41,11 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
   outline-offset: 2px;
 }
 
-.app-shell { min-height: 100vh; }
+.app-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  background-color: #f0f7f3;
+}
 
 .home-page, .editor-page, .responses-page, .detail-page { width: min(1120px, calc(100% - 48px)); margin: 0 auto; }
 
