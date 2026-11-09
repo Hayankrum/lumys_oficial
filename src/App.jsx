@@ -504,7 +504,7 @@ function lerNavegacaoSalva() {
 
 function App() {
   const [navegacaoInicial] = useState(lerNavegacaoSalva)
-  const [tela, setTela] = useState(() => {
+  const [tela, setTelaEstado] = useState(() => {
     if (codigoDaUrl()) return 'carregando'
     if (!navegacaoInicial) return 'inicio'
     if (navegacaoInicial.formularioId && TELAS_COM_FORMULARIO.includes(navegacaoInicial.tela)) {
@@ -545,7 +545,31 @@ function App() {
   const [formularioParaExcluir, setFormularioParaExcluir] = useState(null)
   const [excluindoFormulario, setExcluindoFormulario] = useState(false)
   const scannerVideo = useRef(null)
+  const entradaDeRotaPendente = useRef(false)
+  const numeroRestauracaoHistorico = useRef(0)
   const sincronizacaoRef = useRef(new Map())
+  const inicializacaoHistorico = useRef({ tela, navegacaoInicial, abaInicio })
+  const navegacaoAtual = useRef({ formularioId: formularioAtivo?.id ?? null, somenteLeitura, abaInicio })
+  const setTela = useCallback((proximaTela) => {
+    setTelaEstado(proximaTela)
+    if (proximaTela === 'carregando') return
+    const navegacao = {
+      tela: proximaTela,
+      formularioId: TELAS_COM_FORMULARIO.includes(proximaTela) ? navegacaoAtual.current.formularioId : null,
+      somenteLeitura: navegacaoAtual.current.somenteLeitura,
+      abaInicio: navegacaoAtual.current.abaInicio,
+    }
+    const estado = { lumysNavigation: navegacao }
+    if (entradaDeRotaPendente.current) {
+      window.history.replaceState(estado, '', window.location.href)
+      entradaDeRotaPendente.current = false
+    } else {
+      window.history.pushState(estado, '', window.location.href)
+    }
+  }, [])
+  useEffect(() => {
+    navegacaoAtual.current = { formularioId: formularioAtivo?.id ?? null, somenteLeitura, abaInicio }
+  }, [formularioAtivo?.id, somenteLeitura, abaInicio])
   const jsonModo = 'substituir'
   const formularios = useLiveQuery(() => db.formularios.orderBy('atualizadoEm').reverse().toArray(), [])
   const todasRespostas = useLiveQuery(() => db.respostas.toArray(), [])
@@ -662,6 +686,29 @@ function App() {
   }, [])
 
   useEffect(() => {
+    const inicial = inicializacaoHistorico.current
+    const urlInicial = window.location.href
+    const urlBase = `${window.location.pathname}${window.location.search}`
+    const inicio = { tela: 'inicio', formularioId: null, somenteLeitura: false, abaInicio: inicial.abaInicio }
+    if (inicial.tela === 'inicio' && !codigoDaUrl()) {
+      window.history.replaceState({ lumysNavigation: inicio }, '', urlInicial)
+      return
+    }
+
+    window.history.replaceState({ lumysNavigation: inicio }, '', urlBase)
+    const telaInicial = inicial.tela === 'carregando'
+      ? { tela: 'carregando', formularioId: null, somenteLeitura: false, abaInicio: inicial.abaInicio }
+      : {
+          tela: inicial.tela,
+          formularioId: inicial.navegacaoInicial?.formularioId ?? null,
+          somenteLeitura: Boolean(inicial.navegacaoInicial?.somenteLeitura),
+          abaInicio: inicial.abaInicio,
+        }
+    window.history.pushState({ lumysNavigation: telaInicial }, '', urlInicial)
+    entradaDeRotaPendente.current = inicial.tela === 'carregando'
+  }, [])
+
+  useEffect(() => {
     if (tela !== 'carregando' || !navegacaoInicial?.formularioId || codigoDaUrl()) return
     if (authCarregando) return
     let cancelado = false
@@ -671,18 +718,21 @@ function App() {
       if (cancelado) return
       if (!TELAS_COM_FORMULARIO.includes(salva.tela) || !formulario) {
         setErro('A página anterior não está mais disponível. Você voltou para o início.')
-        setTela(conta ? 'lista' : 'inicio')
+        entradaDeRotaPendente.current = false
+        setTelaEstado(conta ? 'lista' : 'inicio')
         return
       }
       if (!conta && ['detalhes', 'editar', 'respostas'].includes(salva.tela)) {
-        setTela('lista')
+        entradaDeRotaPendente.current = false
+        setTelaEstado('lista')
         return
       }
       setFormularioAtivo(formulario)
       setRascunho(formulario)
       setSomenteLeitura(Boolean(salva.somenteLeitura))
       if (salva.tela === 'responder') setRespostas({})
-      setTela(salva.tela)
+      entradaDeRotaPendente.current = false
+      setTelaEstado(salva.tela)
     })
     return () => { cancelado = true }
   }, [tela, authCarregando, conta, navegacaoInicial])
@@ -700,6 +750,7 @@ function App() {
     } catch {
       // Ignora falhas de armazenamento: a navegação continua funcionando sem a restauração.
     }
+    window.history.replaceState({ lumysNavigation: estado }, '', window.location.href)
   }, [tela, formularioAtivo?.id, somenteLeitura, abaInicio])
 
   useEffect(() => {
@@ -741,6 +792,7 @@ function App() {
   }, [contaId])
 
   const abrirFormularioPublico = useCallback(async (codigo, atualizarUrl = false) => {
+    const operacao = ++numeroRestauracaoHistorico.current
     const codigoNormalizado = codigo.trim().toUpperCase()
     if (!/^[A-Z0-9]{8,16}$/.test(codigoNormalizado)) {
       setErro('Informe um código válido com 8 a 16 letras ou números.')
@@ -752,7 +804,9 @@ function App() {
     setTela('carregando')
     try {
       const formulario = await requisitarApi(`/api/formularios/${codigoNormalizado}`)
+      if (operacao !== numeroRestauracaoHistorico.current) return
       const local = await db.formularios.where('codigo').equals(codigoNormalizado).first()
+      if (operacao !== numeroRestauracaoHistorico.current) return
       const formularioEmCache = {
         ...local,
         ...formulario,
@@ -762,16 +816,19 @@ function App() {
         publica: true,
       }
       await db.formularios.put(formularioEmCache)
+      if (operacao !== numeroRestauracaoHistorico.current) return
       setFormularioAtivo(formularioEmCache)
       setRespostas({})
       setRespostaIdPendente(null)
       setCodigoBusca(codigoNormalizado)
       setTela('responder')
       if (atualizarUrl) {
-        window.history.pushState(null, '', `#/form/${codigoNormalizado}`)
+        window.history.replaceState(window.history.state, '', `#/form/${codigoNormalizado}`)
       }
     } catch (error) {
+      if (operacao !== numeroRestauracaoHistorico.current) return
       const local = await db.formularios.where('codigo').equals(codigoNormalizado).first()
+      if (operacao !== numeroRestauracaoHistorico.current) return
       if (local && (local.publicada || local.publica) && (!navigator.onLine || !error.status)) {
         setFormularioAtivo({ ...local, publica: true })
         setRespostas({})
@@ -779,14 +836,80 @@ function App() {
         setCodigoBusca(codigoNormalizado)
         setErro('Formulário aberto do dispositivo. A resposta será sincronizada quando a conexão voltar.')
         setTela('responder')
-        if (atualizarUrl) window.history.pushState(null, '', `#/form/${codigoNormalizado}`)
+        if (atualizarUrl) window.history.replaceState(window.history.state, '', `#/form/${codigoNormalizado}`)
         return
       }
       setErro(mensagemDeErro(error, 'Não foi possível encontrar o formulário.'))
       setCodigoBusca(codigoNormalizado)
       setTela('inicio')
+      if (codigoDaUrl()) {
+        window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
+      }
     }
-  }, [])
+  }, [setTela])
+
+  useEffect(() => {
+    const aoVoltarNoHistorico = async (event) => {
+      const restauracao = ++numeroRestauracaoHistorico.current
+      entradaDeRotaPendente.current = false
+      const navegacao = event.state?.lumysNavigation
+      if (!navegacao) {
+        const codigo = codigoDaUrl()
+        if (codigo) {
+          entradaDeRotaPendente.current = true
+          void abrirFormularioPublico(codigo)
+          return
+        }
+        const inicio = { tela: 'inicio', formularioId: null, somenteLeitura: false, abaInicio }
+        window.history.replaceState({ lumysNavigation: inicio }, '', window.location.href)
+        setTelaEstado('inicio')
+        setScannerAberto(false)
+        return
+      }
+
+      const telasValidas = ['inicio', 'lista', 'perfil', 'respondidos', ...TELAS_COM_FORMULARIO]
+      if (!telasValidas.includes(navegacao.tela)) {
+        setErro('Não foi possível restaurar a página anterior. Você voltou para o início.')
+        setTelaEstado('inicio')
+        return
+      }
+
+      setScannerAberto(false)
+      setErro('')
+      setSomenteLeitura(Boolean(navegacao.somenteLeitura))
+      setAbaInicio(navegacao.abaInicio === 'respondidos' ? 'respondidos' : 'meus')
+      if (navegacao.formularioId && TELAS_COM_FORMULARIO.includes(navegacao.tela)) {
+        try {
+          const formulario = await db.formularios.get(navegacao.formularioId)
+          if (restauracao !== numeroRestauracaoHistorico.current) return
+          if (!formulario) {
+            setErro('A página anterior não está mais disponível. Você voltou para o início.')
+            setTelaEstado(conta ? 'lista' : 'inicio')
+            return
+          }
+          if (!conta && ['detalhes', 'editar', 'respostas'].includes(navegacao.tela)) {
+            setTelaEstado('lista')
+            return
+          }
+          if (formularioAtivo?.id !== formulario.id && navegacao.tela === 'responder') {
+            setRespostas({})
+            setRespostaIdPendente(null)
+          }
+          setFormularioAtivo(formulario)
+          setRascunho(formulario)
+        } catch (error) {
+          if (restauracao !== numeroRestauracaoHistorico.current) return
+          setErro(`Não foi possível restaurar a página anterior: ${mensagemDeErro(error)}`)
+          setTelaEstado(conta ? 'lista' : 'inicio')
+          return
+        }
+      }
+      if (restauracao === numeroRestauracaoHistorico.current) setTelaEstado(navegacao.tela)
+    }
+
+    window.addEventListener('popstate', aoVoltarNoHistorico)
+    return () => window.removeEventListener('popstate', aoVoltarNoHistorico)
+  }, [abaInicio, abrirFormularioPublico, conta, formularioAtivo?.id])
 
   async function concluirAutenticacao(contaAutenticada) {
     window.localStorage.removeItem('lumys:logout-pendente')
@@ -877,12 +1000,19 @@ function App() {
 
   useEffect(() => {
     const sincronizacoesAtivas = sincronizacaoRef.current
-    const abrirPelaUrl = () => {
+    const abrirPelaUrl = (event) => {
+      if (event && window.history.state?.lumysNavigation) return
       const codigo = codigoDaUrl()
-      if (codigo) void abrirFormularioPublico(codigo)
+      if (codigo) {
+        entradaDeRotaPendente.current = true
+        void abrirFormularioPublico(codigo)
+      }
       else {
         setFormularioAtivo(null)
-        setTela('inicio')
+        setTelaEstado('inicio')
+        window.history.replaceState({
+          lumysNavigation: { tela: 'inicio', formularioId: null, somenteLeitura: false, abaInicio },
+        }, '', window.location.href)
       }
     }
     if (codigoDaUrl()) abrirPelaUrl()
@@ -892,7 +1022,7 @@ function App() {
       for (const timeout of sincronizacoesAtivas.values()) window.clearTimeout(timeout)
       sincronizacoesAtivas.clear()
     }
-  }, [abrirFormularioPublico])
+  }, [abaInicio, abrirFormularioPublico])
 
   useEffect(() => {
     if (!scannerAberto || tela !== 'inicio') return undefined
@@ -1485,22 +1615,22 @@ function App() {
 
   const voltarInicio = () => {
     if (!confirmarSaidaDoEditor()) return
-    if (codigoDaUrl()) {
-      window.history.pushState(null, '', `${window.location.pathname}${window.location.search}`)
-    }
     setScannerAberto(false)
     setTela('inicio')
+    if (codigoDaUrl()) {
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
+    }
     setErro('')
   }
 
   const abrirLista = () => {
     if (!confirmarSaidaDoEditor()) return
-    if (codigoDaUrl()) {
-      window.history.pushState(null, '', `${window.location.pathname}${window.location.search}`)
-    }
     setScannerAberto(false)
-    setErro('')
     setTela('lista')
+    if (codigoDaUrl()) {
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}`)
+    }
+    setErro('')
   }
 
   return (
