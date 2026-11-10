@@ -525,6 +525,7 @@ function App() {
   const [authErro, setAuthErro] = useState('')
   const [authOcupado, setAuthOcupado] = useState(false)
   const [rascunho, setRascunho] = useState(null)
+  const [formularioNovo, setFormularioNovo] = useState(false)
   const [alteracoesPendentes, setAlteracoesPendentes] = useState(false)
   const [formularioAtivo, setFormularioAtivo] = useState(null)
   const [somenteLeitura, setSomenteLeitura] = useState(false)
@@ -548,6 +549,7 @@ function App() {
   const entradaDeRotaPendente = useRef(false)
   const numeroRestauracaoHistorico = useRef(0)
   const sincronizacaoRef = useRef(new Map())
+  const rascunhoRef = useRef(null)
   const inicializacaoHistorico = useRef({ tela, navegacaoInicial, abaInicio })
   const navegacaoAtual = useRef({ formularioId: formularioAtivo?.id ?? null, somenteLeitura, abaInicio })
   const setTela = useCallback((proximaTela) => {
@@ -570,6 +572,9 @@ function App() {
   useEffect(() => {
     navegacaoAtual.current = { formularioId: formularioAtivo?.id ?? null, somenteLeitura, abaInicio }
   }, [formularioAtivo?.id, somenteLeitura, abaInicio])
+  useEffect(() => {
+    rascunhoRef.current = rascunho
+  }, [rascunho])
   const jsonModo = 'substituir'
   const formularios = useLiveQuery(() => db.formularios.orderBy('atualizadoEm').reverse().toArray(), [])
   const todasRespostas = useLiveQuery(() => db.respostas.toArray(), [])
@@ -729,6 +734,7 @@ function App() {
       }
       setFormularioAtivo(formulario)
       setRascunho(formulario)
+      setFormularioNovo(false)
       setSomenteLeitura(Boolean(salva.somenteLeitura))
       if (salva.tela === 'responder') setRespostas({})
       entradaDeRotaPendente.current = false
@@ -874,6 +880,11 @@ function App() {
         return
       }
 
+      if (navegacao.tela === 'editar' && !navegacao.formularioId && !rascunhoRef.current) {
+        setTelaEstado(conta ? 'lista' : 'inicio')
+        return
+      }
+
       setScannerAberto(false)
       setErro('')
       setSomenteLeitura(Boolean(navegacao.somenteLeitura))
@@ -897,6 +908,7 @@ function App() {
           }
           setFormularioAtivo(formulario)
           setRascunho(formulario)
+          setFormularioNovo(false)
         } catch (error) {
           if (restauracao !== numeroRestauracaoHistorico.current) return
           setErro(`Não foi possível restaurar a página anterior: ${mensagemDeErro(error)}`)
@@ -956,6 +968,7 @@ function App() {
     setAbaInicio('meus')
     setTela('inicio')
     setRascunho(null)
+    setFormularioNovo(false)
     setFormularioAtivo(null)
     setAuthModo('login')
     setAuthErro('')
@@ -1129,6 +1142,7 @@ function App() {
     }
 
     setRascunho(confirmado)
+    setFormularioNovo(false)
     setAlteracoesPendentes(false)
     setFormularioAtivo(confirmado)
     setTela('detalhes')
@@ -1209,25 +1223,13 @@ function App() {
     }
   }
 
-  async function criarFormulario() {
+  function criarFormulario() {
     const formulario = { ...novoFormulario(), contaId: conta?.id }
-    await db.formularios.put(formulario)
-    if (conta) {
-      try {
-        await enfileirarRequisicao({
-          url: `/api/conta/formularios/${formulario.id}`,
-          method: 'PUT',
-          body: JSON.stringify({ formulario }),
-          contaId: conta.id,
-          chave: `formulario-conta:${formulario.id}`,
-        })
-        await sincronizarFilaApi(conta.id)
-      } catch (error) {
-        setErro(`Formulário salvo neste dispositivo, mas não foi possível preparar a sincronização: ${mensagemDeErro(error)}`)
-      }
-    }
+    setFormularioAtivo(null)
     setRascunho(formulario)
+    setFormularioNovo(true)
     setAlteracoesPendentes(false)
+    setErro('')
     setTela('editar')
   }
 
@@ -1278,6 +1280,7 @@ function App() {
         return
       }
       setRascunho(completo)
+      setFormularioNovo(false)
       setAlteracoesPendentes(false)
       setErro('')
       setTela('editar')
@@ -1607,10 +1610,15 @@ function App() {
   }
 
   const confirmarSaidaDoEditor = () => {
-    if (tela !== 'editar' || !alteracoesPendentes) return true
-    const sair = window.confirm('As alterações ainda não foram confirmadas. Deseja sair e descartá-las?')
-    if (sair) setAlteracoesPendentes(false)
-    return sair
+    if (tela !== 'editar') return true
+    if (alteracoesPendentes &&
+        !window.confirm('As alterações ainda não foram confirmadas. Deseja sair e descartá-las?')) return false
+    if (formularioNovo) {
+      setRascunho(null)
+      setFormularioNovo(false)
+    }
+    setAlteracoesPendentes(false)
+    return true
   }
 
   const voltarInicio = () => {
@@ -1825,7 +1833,7 @@ function App() {
         <section className="editor-page">
           <div className="editor-toolbar">
             <span className={`save-status${erro ? ' save-status--error' : ''}`} role={erro ? 'alert' : undefined}>
-              {erro || (alteracoesPendentes ? 'Alterações aguardando confirmação' : 'Sem alterações pendentes')}
+              {erro || (alteracoesPendentes ? 'Alterações aguardando confirmação' : formularioNovo ? 'Novo formulário — confirme para criar' : 'Sem alterações pendentes')}
             </span>
             <div className="editor-toolbar-actions">
               <button className="button button--small button--quiet" type="button" onClick={abrirJson} title="Importar formulário">Importar</button>
