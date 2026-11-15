@@ -227,6 +227,11 @@ app.get('/api/conta/respostas', autenticar, async (req, res) => {
        from respostas_publicas
        join formularios_conta on formularios_conta.conta_id = $1
          and respostas_publicas.formulario_codigo = formularios_conta.formulario->>'codigo'
+       union
+       select respostas_publicas.id, respostas_publicas.formulario_id,
+              respostas_publicas.respostas, respostas_publicas.criado_em
+       from respostas_publicas
+       where respostas_publicas.respondente_conta_id = $1
        order by criado_em desc`,
       [req.conta.id]
     )
@@ -248,14 +253,16 @@ app.get('/api/conta/respondidos', autenticar, async (req, res) => {
       `select formularios_publicos.codigo, formularios_publicos.id,
          formularios_publicos.titulo, formularios_publicos.descricao,
          formularios_publicos.perguntas,
+         contas.email as criador_email,
          max(respostas_publicas.criado_em) as respondido_em,
          count(respostas_publicas.id) as total_respostas
        from respostas_publicas
        join formularios_publicos on formularios_publicos.codigo = respostas_publicas.formulario_codigo
+       left join contas on contas.id = formularios_publicos.conta_id
        where respostas_publicas.respondente_conta_id = $1
        group by formularios_publicos.codigo, formularios_publicos.id,
          formularios_publicos.titulo, formularios_publicos.descricao,
-         formularios_publicos.perguntas
+         formularios_publicos.perguntas, contas.email
        order by max(respostas_publicas.criado_em) desc`,
       [req.conta.id]
     )
@@ -265,6 +272,7 @@ app.get('/api/conta/respondidos', autenticar, async (req, res) => {
       titulo: row.titulo,
       descricao: row.descricao,
       perguntas: row.perguntas,
+      criadorEmail: row.criador_email ?? null,
       respondidoEm: Number(row.respondido_em),
       totalRespostas: Number(row.total_respostas),
       publica: true,
@@ -283,7 +291,9 @@ app.put('/api/conta/formularios/:id', autenticar, async (req, res) => {
       formulario.perguntas.length > 100 || !Number.isSafeInteger(formulario.atualizadoEm) ||
       formulario.perguntas.some((pergunta) => !pergunta || !uuidValido(pergunta.id) ||
         typeof pergunta.titulo !== 'string' || typeof pergunta.tipo !== 'string' ||
-        typeof pergunta.obrigatoria !== 'boolean')) {
+        typeof pergunta.obrigatoria !== 'boolean') ||
+      (formulario.metaRespostas !== undefined && formulario.metaRespostas !== null &&
+        (!Number.isSafeInteger(formulario.metaRespostas) || formulario.metaRespostas < 1 || formulario.metaRespostas > 1_000_000))) {
     return res.status(400).json({ erro: 'Dados inválidos para sincronizar o formulário.' })
   }
   try {
@@ -390,11 +400,33 @@ app.post('/api/conta/formularios/:id/respostas', autenticar, async (req, res) =>
         perguntas.some((pergunta) => !validarResposta(pergunta, respostas[pergunta.id]))) {
       return res.status(400).json({ erro: 'Informe respostas válidas para as perguntas do formulário.' })
     }
-    await pool.query(
+    const inserida = await pool.query(
       `insert into respostas_conta (id, conta_id, formulario_id, respostas, criado_em)
-       values ($1,$2,$3,$4,$5) on conflict (conta_id, id) do nothing`,
+       values ($1,$2,$3,$4,$5) on conflict (conta_id, id) do nothing
+       returning id`,
       [id, req.conta.id, req.params.id, JSON.stringify(respostas), criadoEm]
     )
+    const dados = formulario.rows[0].formulario
+    const codigo = typeof dados?.codigo === 'string' ? dados.codigo : null
+    const meta = Number(dados?.metaRespostas)
+    if (inserida.rowCount && Number.isSafeInteger(meta) && meta >= 1) {
+      const contagem = await pool.query(
+        `select
+           (select count(*) from respostas_conta
+             where conta_id = $1 and formulario_id = $2) +
+           (select count(*) from respostas_publicas
+             where formulario_codigo = $3) as total`,
+        [req.conta.id, req.params.id, codigo]
+      )
+      await notificarMetaAtingida({
+        contaId: req.conta.id,
+        formularioId: req.params.id,
+        titulo: dados?.titulo,
+        meta,
+        total: contagem.rows[0]?.total,
+        codigo,
+      })
+    }
     res.status(201).json({ ok: true, id })
   } catch (error) {
     console.error(error)
@@ -431,11 +463,15 @@ function validarResposta(pergunta, resposta) {
 app.put('/api/formularios/:codigo', autenticar, async (req, res) => {
   const codigo = req.params.codigo.toUpperCase()
   const token = req.get('x-owner-token')
-  const { id, titulo, descricao, perguntas, atualizadoEm } = req.body ?? {}
+  const { id, titulo, descricao, perguntas, atualizadoEm, metaRespostas } = req.body ?? {}
+  const meta = metaRespostas === undefined || metaRespostas === null || metaRespostas === ''
+    ? null
+    : Number(metaRespostas)
   if (!codigoValido(codigo) || !token || token.length > 200 || !uuidValido(id) ||
       typeof titulo !== 'string' || typeof descricao !== 'string' ||
       titulo.length > 1000 || descricao.length > 5000 ||
       !Array.isArray(perguntas) || perguntas.length === 0 || perguntas.length > 100 ||
+      (meta !== null && (!Number.isSafeInteger(meta) || meta < 1 || meta > 1_000_000)) ||
       !Number.isSafeInteger(atualizadoEm)) {
     return res.status(400).json({ erro: 'Dados inválidos para publicar o formulário.' })
   }
@@ -456,20 +492,21 @@ app.put('/api/formularios/:codigo', autenticar, async (req, res) => {
     }
     const { rows } = await pool.query(
       `insert into formularios_publicos
-         (codigo, id, titulo, descricao, perguntas, token_hash, atualizado_em, conta_id)
-       values ($1,$2,$3,$4,$5,$6,$7,$8)
+         (codigo, id, titulo, descricao, perguntas, token_hash, atualizado_em, conta_id, meta_respostas)
+       values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        on conflict (codigo) do update set
          id = excluded.id,
          titulo = excluded.titulo,
          descricao = excluded.descricao,
          perguntas = excluded.perguntas,
          atualizado_em = excluded.atualizado_em,
-         conta_id = excluded.conta_id
+         conta_id = excluded.conta_id,
+         meta_respostas = excluded.meta_respostas
        where formularios_publicos.token_hash = excluded.token_hash
          and (formularios_publicos.conta_id is null or formularios_publicos.conta_id = excluded.conta_id)
          and formularios_publicos.atualizado_em <= excluded.atualizado_em
        returning codigo`,
-      [codigo, id, titulo, descricao, JSON.stringify(perguntas), hashToken(token), atualizadoEm, req.conta.id]
+      [codigo, id, titulo, descricao, JSON.stringify(perguntas), hashToken(token), atualizadoEm, req.conta.id, meta]
     )
     if (!rows.length) return res.status(409).json({ erro: 'Este código já está em uso ou o formulário foi atualizado em outro dispositivo.' })
     res.json({ ok: true, codigo })
@@ -556,7 +593,7 @@ app.post('/api/formularios/:codigo/respostas', limitarRespostaPublica, async (re
       : { rows: [] }
     const respondenteContaId = contaRespondente.rows[0]?.conta_id ?? null
     const formulario = await pool.query(
-      'select id, perguntas from formularios_publicos where codigo = $1',
+      'select id, perguntas, titulo, meta_respostas, conta_id from formularios_publicos where codigo = $1',
       [codigo]
     )
     if (!formulario.rowCount) return res.status(404).json({ erro: 'Formulário não encontrado.' })
@@ -577,6 +614,21 @@ app.post('/api/formularios/:codigo/respostas', limitarRespostaPublica, async (re
     )
     if (rows.length) {
       const row = rows[0]
+      const dados = formulario.rows[0]
+      if (dados.conta_id && dados.meta_respostas) {
+        const contagem = await pool.query(
+          'select count(*)::int as total from respostas_publicas where formulario_codigo = $1',
+          [codigo]
+        )
+        await notificarMetaAtingida({
+          contaId: dados.conta_id,
+          formularioId: dados.id,
+          titulo: dados.titulo,
+          meta: dados.meta_respostas,
+          total: contagem.rows[0]?.total,
+          codigo,
+        })
+      }
       return res.status(201).json({
         id: row.id,
         formularioId: row.formulario_id,
@@ -601,7 +653,7 @@ app.get('/api/formularios/:codigo', async (req, res) => {
   if (!codigoValido(codigo)) return res.status(400).json({ erro: 'Código inválido.' })
   try {
     const { rows } = await pool.query(
-      `select codigo, id, titulo, descricao, perguntas, atualizado_em
+      `select codigo, id, titulo, descricao, perguntas, atualizado_em, meta_respostas
        from formularios_publicos where codigo = $1`,
       [codigo]
     )
@@ -613,12 +665,304 @@ app.get('/api/formularios/:codigo', async (req, res) => {
       titulo: row.titulo,
       descricao: row.descricao,
       perguntas: row.perguntas,
+      metaRespostas: row.meta_respostas === null ? null : Number(row.meta_respostas),
       atualizadoEm: Number(row.atualizado_em),
       publica: true,
     })
   } catch (error) {
     console.error(error)
     res.status(500).json({ erro: 'Não foi possível localizar o formulário.' })
+  }
+})
+
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY ?? ''
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY ?? ''
+const VAPID_SUBJECT = process.env.VAPID_SUBJECT || process.env.VAPID_EMAIL || ''
+
+let webPushPronto = null
+async function carregarWebPush() {
+  if (!VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY || !VAPID_SUBJECT) return null
+  if (webPushPronto) return webPushPronto
+  try {
+    const modulo = await import('web-push')
+    const webpush = modulo.default ?? modulo
+    webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY)
+    webPushPronto = webpush
+    return webpush
+  } catch (error) {
+    console.error('[Notificação] Não foi possível carregar o web-push:', error)
+    return null
+  }
+}
+
+async function enviarPush(contaId, payload) {
+  try {
+    const webpush = await carregarWebPush()
+    if (!webpush) return
+    const { rows } = await pool.query(
+      'select id, endpoint, p256dh, auth from inscricoes_push where conta_id = $1',
+      [contaId]
+    )
+    if (!rows.length) return
+    const corpo = JSON.stringify(payload)
+    await Promise.allSettled(rows.map(async (inscricao) => {
+      try {
+        await webpush.sendNotification(
+          { endpoint: inscricao.endpoint, keys: { p256dh: inscricao.p256dh, auth: inscricao.auth } },
+          corpo
+        )
+      } catch (error) {
+        if (error?.statusCode === 404 || error?.statusCode === 410) {
+          await pool.query('delete from inscricoes_push where id = $1', [inscricao.id])
+        }
+      }
+    }))
+  } catch (error) {
+    console.error('[Notificação] Erro ao enviar push:', error)
+  }
+}
+
+async function criarNotificacao({ contaId, titulo, mensagem, url }) {
+  try {
+    const { rows } = await pool.query(
+      'select notificacoes_ativas, notificar_sistema from contas where id = $1',
+      [contaId]
+    )
+    if (!rows.length || !rows[0].notificacoes_ativas || !rows[0].notificar_sistema) return false
+    await pool.query(
+      `insert into notificacoes (id, conta_id, titulo, mensagem, url, lida, criada_em)
+       values ($1,$2,$3,$4,$5,false,$6)`,
+      [randomUUID(), contaId, titulo, mensagem, url ?? null, Date.now()]
+    )
+    await enviarPush(contaId, {
+      title: titulo,
+      body: mensagem,
+      url: url ?? '/',
+      icon: '/pwa-192x192.png',
+      badge: '/pwa-192x192.png',
+      tag: 'lumys-notificacao',
+    })
+    return true
+  } catch (error) {
+    console.error('[Notificação] Erro ao criar notificação:', error)
+    return false
+  }
+}
+
+async function notificarMetaAtingida({ contaId, formularioId, titulo, meta, total, codigo }) {
+  const metaNumero = Number(meta)
+  const totalNumero = Number(total)
+  if (!contaId || !formularioId || !Number.isSafeInteger(metaNumero) || metaNumero < 1) return
+  if (!Number.isFinite(totalNumero) || totalNumero < metaNumero) return
+  try {
+    const { rows } = await pool.query(
+      'select notificar_questionarios from contas where id = $1',
+      [contaId]
+    )
+    if (!rows.length || !rows[0].notificar_questionarios) return
+    const reserva = await pool.query(
+      `insert into metas_notificadas (conta_id, formulario_id, notificada_em)
+       values ($1,$2,$3)
+       on conflict (conta_id, formulario_id) do nothing
+       returning conta_id`,
+      [contaId, formularioId, Date.now()]
+    )
+    if (!reserva.rowCount) return
+    await criarNotificacao({
+      contaId,
+      titulo: 'Meta de respostas atingida!',
+      mensagem: `O questionário "${titulo || 'Sem título'}" atingiu ${metaNumero} respostas (${totalNumero} no total)`,
+      url: codigo ? `#/form/${codigo}` : '#/notificacoes',
+    })
+  } catch (error) {
+    console.error('[Notificação] Erro ao notificar a meta:', error)
+  }
+}
+
+app.get('/api/vapid-key', (_req, res) => {
+  if (!VAPID_PUBLIC_KEY) {
+    return res.status(500).json({ erro: 'As notificações push não estão configuradas no servidor.' })
+  }
+  res.json({ publicKey: VAPID_PUBLIC_KEY })
+})
+
+app.post('/api/subscribe', autenticar, async (req, res) => {
+  const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint : ''
+  const keys = req.body?.keys
+  if (!endpoint || endpoint.length > 2000 ||
+      !keys || typeof keys.p256dh !== 'string' || typeof keys.auth !== 'string') {
+    return res.status(400).json({ erro: 'Inscrição de notificação inválida.' })
+  }
+  try {
+    await pool.query(
+      `insert into inscricoes_push (id, conta_id, endpoint, p256dh, auth, criada_em)
+       values ($1,$2,$3,$4,$5,$6)
+       on conflict (endpoint) do update set
+         conta_id = excluded.conta_id,
+         p256dh = excluded.p256dh,
+         auth = excluded.auth,
+         criada_em = excluded.criada_em`,
+      [randomUUID(), req.conta.id, endpoint, keys.p256dh, keys.auth, Date.now()]
+    )
+    res.status(201).json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ erro: 'Não foi possível registrar a inscrição de notificação.' })
+  }
+})
+
+app.post('/api/subscribe/check', autenticar, async (req, res) => {
+  const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint : ''
+  if (!endpoint) return res.json({ registered: false })
+  try {
+    const { rowCount } = await pool.query(
+      'select 1 from inscricoes_push where endpoint = $1 and conta_id = $2',
+      [endpoint, req.conta.id]
+    )
+    res.json({ registered: rowCount > 0 })
+  } catch (error) {
+    console.error(error)
+    res.json({ registered: false })
+  }
+})
+
+app.post('/api/unsubscribe', autenticar, async (req, res) => {
+  const endpoint = typeof req.body?.endpoint === 'string' ? req.body.endpoint : ''
+  if (!endpoint) return res.status(400).json({ erro: 'Inscrição de notificação inválida.' })
+  try {
+    await pool.query(
+      'delete from inscricoes_push where endpoint = $1 and conta_id = $2',
+      [endpoint, req.conta.id]
+    )
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ erro: 'Não foi possível remover a inscrição de notificação.' })
+  }
+})
+
+app.get('/api/notifications/unread', autenticar, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      'select count(*)::int as total from notificacoes where conta_id = $1 and lida = false',
+      [req.conta.id]
+    )
+    res.json({ count: rows[0]?.total ?? 0 })
+  } catch (error) {
+    console.error(error)
+    res.json({ count: 0 })
+  }
+})
+
+app.get('/api/notifications/history', autenticar, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `select id, titulo, mensagem, url, lida, criada_em
+       from notificacoes where conta_id = $1
+       order by criada_em desc
+       limit 50`,
+      [req.conta.id]
+    )
+    res.json({
+      notificacoes: rows.map((row) => ({
+        id: row.id,
+        titulo: row.titulo,
+        mensagem: row.mensagem,
+        url: row.url,
+        lida: row.lida,
+        criadaEm: Number(row.criada_em),
+      })),
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ erro: 'Não foi possível carregar as notificações.' })
+  }
+})
+
+app.post('/api/notifications/read', autenticar, async (req, res) => {
+  const { id, all } = req.body ?? {}
+  try {
+    if (all) {
+      await pool.query(
+        'update notificacoes set lida = true where conta_id = $1 and lida = false',
+        [req.conta.id]
+      )
+    } else if (uuidValido(id)) {
+      await pool.query(
+        'update notificacoes set lida = true where id = $1 and conta_id = $2',
+        [id, req.conta.id]
+      )
+    } else {
+      return res.status(400).json({ erro: 'Parâmetro inválido.' })
+    }
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ erro: 'Não foi possível marcar as notificações como lidas.' })
+  }
+})
+
+app.post('/api/notifications/delete', autenticar, async (req, res) => {
+  const { id, all } = req.body ?? {}
+  try {
+    if (all) {
+      await pool.query('delete from notificacoes where conta_id = $1', [req.conta.id])
+    } else if (uuidValido(id)) {
+      await pool.query('delete from notificacoes where id = $1 and conta_id = $2', [id, req.conta.id])
+    } else {
+      return res.status(400).json({ erro: 'Parâmetro inválido.' })
+    }
+    res.json({ ok: true })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ erro: 'Não foi possível excluir as notificações.' })
+  }
+})
+
+app.get('/api/notifications/preferences', autenticar, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `select notificacoes_ativas, notificar_sistema, notificar_questionarios
+       from contas where id = $1`,
+      [req.conta.id]
+    )
+    if (!rows.length) return res.status(404).json({ erro: 'Conta não encontrada.' })
+    res.json({
+      notificacoesAtivas: rows[0].notificacoes_ativas,
+      notificarSistema: rows[0].notificar_sistema,
+      notificarQuestionarios: rows[0].notificar_questionarios,
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ erro: 'Não foi possível carregar as preferências de notificação.' })
+  }
+})
+
+app.put('/api/notifications/preferences', autenticar, async (req, res) => {
+  const { notificacoesAtivas, notificarSistema, notificarQuestionarios } = req.body ?? {}
+  const valores = [notificacoesAtivas, notificarSistema, notificarQuestionarios]
+  if (valores.some((valor) => valor !== undefined && typeof valor !== 'boolean')) {
+    return res.status(400).json({ erro: 'Preferências de notificação inválidas.' })
+  }
+  try {
+    const { rows } = await pool.query(
+      `update contas set
+         notificacoes_ativas = coalesce($2, notificacoes_ativas),
+         notificar_sistema = coalesce($3, notificar_sistema),
+         notificar_questionarios = coalesce($4, notificar_questionarios)
+       where id = $1
+       returning notificacoes_ativas, notificar_sistema, notificar_questionarios`,
+      [req.conta.id, notificacoesAtivas ?? null, notificarSistema ?? null, notificarQuestionarios ?? null]
+    )
+    if (!rows.length) return res.status(404).json({ erro: 'Conta não encontrada.' })
+    res.json({
+      notificacoesAtivas: rows[0].notificacoes_ativas,
+      notificarSistema: rows[0].notificar_sistema,
+      notificarQuestionarios: rows[0].notificar_questionarios,
+    })
+  } catch (error) {
+    console.error(error)
+    res.status(500).json({ erro: 'Não foi possível salvar as preferências de notificação.' })
   }
 })
 
@@ -714,6 +1058,47 @@ app.use((error, _req, res, next) => {
 })
 
 async function criarTabelas() {
+  // Reconciliação de esquema: versões anteriores desta base podiam ter uma
+  // tabela "notificacoes" (tipo/chave/lida_em) e "push_inscricoes" de um
+  // desenho antigo. Como o formato é incompatível, movemos essas tabelas
+  // legadas para fora do caminho (sem apagar dados) antes de criar o esquema
+  // atual. O bloco é idempotente: só age quando encontra o esquema antigo.
+  await pool.query(`
+    do $$
+    begin
+      if exists (
+        select 1 from information_schema.tables
+        where table_schema = 'public' and table_name = 'notificacoes'
+      ) and not exists (
+        select 1 from information_schema.columns
+        where table_schema = 'public' and table_name = 'notificacoes' and column_name = 'lida'
+      ) then
+        drop table if exists notificacoes_legado;
+        alter table notificacoes rename to notificacoes_legado;
+        if exists (select 1 from pg_indexes where schemaname = 'public' and indexname = 'notificacoes_conta_criada_idx') then
+          alter index notificacoes_conta_criada_idx rename to notificacoes_legado_conta_criada_idx;
+        end if;
+        if exists (select 1 from pg_indexes where schemaname = 'public' and indexname = 'notificacoes_conta_id_chave_key') then
+          alter index notificacoes_conta_id_chave_key rename to notificacoes_legado_conta_id_chave_key;
+        end if;
+      end if;
+
+      if exists (
+        select 1 from information_schema.tables
+        where table_schema = 'public' and table_name = 'push_inscricoes'
+      ) and not exists (
+        select 1 from information_schema.tables
+        where table_schema = 'public' and table_name = 'inscricoes_push'
+      ) then
+        drop table if exists push_inscricoes_legado;
+        alter table push_inscricoes rename to push_inscricoes_legado;
+        if exists (select 1 from pg_indexes where schemaname = 'public' and indexname = 'push_inscricoes_conta_idx') then
+          alter index push_inscricoes_conta_idx rename to push_inscricoes_legado_conta_idx;
+        end if;
+      end if;
+    end $$;
+  `)
+
   await pool.query(`
     create table if not exists contas (
       id uuid primary key,
@@ -785,6 +1170,44 @@ async function criarTabelas() {
       on respostas_publicas (respondente_conta_id, criado_em desc);
     create index if not exists respostas_publicas_codigo_criado_idx
       on respostas_publicas (formulario_codigo, criado_em desc);
+    alter table contas
+      add column if not exists notificacoes_ativas boolean not null default true;
+    alter table contas
+      add column if not exists notificar_sistema boolean not null default true;
+    alter table contas
+      add column if not exists notificar_questionarios boolean not null default true;
+    alter table formularios_publicos
+      add column if not exists meta_respostas integer;
+    create table if not exists inscricoes_push (
+      id uuid primary key,
+      conta_id uuid not null references contas(id) on delete cascade,
+      endpoint text not null unique,
+      p256dh text not null,
+      auth text not null,
+      criada_em bigint not null
+    );
+    create index if not exists inscricoes_push_conta_idx
+      on inscricoes_push (conta_id);
+    create table if not exists notificacoes (
+      id uuid primary key,
+      conta_id uuid not null references contas(id) on delete cascade,
+      titulo text not null,
+      mensagem text not null,
+      url text,
+      lida boolean not null default false,
+      criada_em bigint not null,
+      enviada_em bigint
+    );
+    create index if not exists notificacoes_conta_criada_idx
+      on notificacoes (conta_id, criada_em desc);
+    create index if not exists notificacoes_conta_lida_idx
+      on notificacoes (conta_id, lida);
+    create table if not exists metas_notificadas (
+      conta_id uuid not null references contas(id) on delete cascade,
+      formulario_id uuid not null,
+      notificada_em bigint not null,
+      primary key (conta_id, formulario_id)
+    );
   `)
 }
 

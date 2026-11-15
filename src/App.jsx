@@ -8,7 +8,9 @@ import AnswerPage from './pages/AnswerPage'
 import DetailsPage from './pages/DetailsPage'
 import HomePage from './pages/HomePage'
 import ListPage from './pages/ListPage'
+import NotificationsPage from './pages/NotificationsPage'
 import ProfilePage from './pages/ProfilePage'
+import NotificationPermissionPopup from './components/NotificationPermissionPopup'
 import './style.css'
 
 const ResultsPage = lazy(() => import('./pages/ResultsPage'))
@@ -26,6 +28,7 @@ const TIPOS = [
 const MODELO_JSON = `{
   "titulo": "Exemplo com todos os tipos de pergunta",
   "descricao": "Edite este JSON e importe o questionário.",
+  "metaRespostas": 10,
   "perguntas": [
     {
       "titulo": "Qual é o seu nome?",
@@ -90,6 +93,12 @@ function validarFormularioJson(texto) {
   }
   if (dados.descricao !== undefined && typeof dados.descricao !== 'string') {
     throw new Error('O campo "descricao" precisa ser um texto.')
+  }
+  if (dados.metaRespostas !== undefined && dados.metaRespostas !== null && dados.metaRespostas !== '') {
+    const meta = Number(dados.metaRespostas)
+    if (!Number.isSafeInteger(meta) || meta < 1 || meta > 1_000_000) {
+      throw new Error('O campo "metaRespostas" precisa ser um número inteiro entre 1 e 1000000.')
+    }
   }
   if (!Array.isArray(dados.perguntas) || dados.perguntas.length === 0) {
     throw new Error('Inclua pelo menos uma pergunta no campo "perguntas".')
@@ -160,6 +169,9 @@ function validarFormularioJson(texto) {
     id: crypto.randomUUID(),
     titulo: dados.titulo?.trim() || 'Questionário sem título',
     descricao: dados.descricao?.trim() ?? '',
+    metaRespostas: (dados.metaRespostas === undefined || dados.metaRespostas === null || dados.metaRespostas === '')
+      ? null
+      : Math.trunc(Number(dados.metaRespostas)),
     perguntas,
     criadoEm: agora,
     atualizadoEm: agora,
@@ -189,6 +201,7 @@ function novoFormulario() {
     publicada: false,
     titulo: 'Questionário sem título',
     descricao: '',
+    metaRespostas: null,
     perguntas: [novaPergunta()],
     criadoEm: agora,
     atualizadoEm: agora,
@@ -202,6 +215,10 @@ function prepararFormulario(formulario) {
 function codigoDaUrl() {
   const correspondencia = window.location.hash.match(/^#\/form\/([A-Z0-9]{8,16})$/i)
   return correspondencia?.[1]?.toUpperCase() ?? ''
+}
+
+function rotaNotificacoesNaUrl() {
+  return /^#\/notificacoes\/?$/i.test(window.location.hash)
 }
 
 function codigoDoQr(texto) {
@@ -506,11 +523,12 @@ function App() {
   const [navegacaoInicial] = useState(lerNavegacaoSalva)
   const [tela, setTelaEstado] = useState(() => {
     if (codigoDaUrl()) return 'carregando'
+    if (rotaNotificacoesNaUrl()) return 'notificacoes'
     if (!navegacaoInicial) return 'inicio'
     if (navegacaoInicial.formularioId && TELAS_COM_FORMULARIO.includes(navegacaoInicial.tela)) {
       return 'carregando'
     }
-    return ['inicio', 'lista', 'perfil', 'respondidos'].includes(navegacaoInicial.tela)
+    return ['inicio', 'lista', 'perfil', 'respondidos', 'notificacoes'].includes(navegacaoInicial.tela)
       ? navegacaoInicial.tela
       : 'inicio'
   })
@@ -597,11 +615,12 @@ function App() {
   ).values()].sort((a, b) => b.criadoEm - a.criadoEm)
 
   const contaId = conta?.id
-  const ehDonoDoFormularioAtivo = Boolean(
-    conta && formularioAtivo &&
-    (formularioAtivo.contaId === conta.id ||
-      (formulariosDaConta ?? []).some((item) => item.id === formularioAtivo.id)),
+  const ehDonoDe = (formulario) => Boolean(
+    conta && formulario &&
+    (formulario.contaId === conta.id ||
+      (formulariosDaConta ?? []).some((item) => item.id === formulario.id)),
   )
+  const ehDonoDoFormularioAtivo = ehDonoDe(formularioAtivo)
   useEffect(() => {
     let cancelado = false
     Promise.resolve().then(async () => {
@@ -873,7 +892,7 @@ function App() {
         return
       }
 
-      const telasValidas = ['inicio', 'lista', 'perfil', 'respondidos', ...TELAS_COM_FORMULARIO]
+      const telasValidas = ['inicio', 'lista', 'perfil', 'respondidos', 'notificacoes', ...TELAS_COM_FORMULARIO]
       if (!telasValidas.includes(navegacao.tela)) {
         setErro('Não foi possível restaurar a página anterior. Você voltou para o início.')
         setTelaEstado('inicio')
@@ -1020,6 +1039,11 @@ function App() {
         entradaDeRotaPendente.current = true
         void abrirFormularioPublico(codigo)
       }
+      else if (rotaNotificacoesNaUrl()) {
+        setScannerAberto(false)
+        setErro('')
+        setTela('notificacoes')
+      }
       else {
         setFormularioAtivo(null)
         setTelaEstado('inicio')
@@ -1035,7 +1059,7 @@ function App() {
       for (const timeout of sincronizacoesAtivas.values()) window.clearTimeout(timeout)
       sincronizacoesAtivas.clear()
     }
-  }, [abaInicio, abrirFormularioPublico])
+  }, [abaInicio, abrirFormularioPublico, setTela])
 
   useEffect(() => {
     if (!scannerAberto || tela !== 'inicio') return undefined
@@ -1105,6 +1129,7 @@ function App() {
           id: formulario.id,
           titulo: formulario.titulo,
           descricao: formulario.descricao,
+          metaRespostas: formulario.metaRespostas ?? null,
           perguntas: formulario.perguntas,
           atualizadoEm: formulario.atualizadoEm,
         }),
@@ -1197,6 +1222,7 @@ function App() {
           id: paraPublicar.id,
           titulo: paraPublicar.titulo,
           descricao: paraPublicar.descricao,
+          metaRespostas: paraPublicar.metaRespostas ?? null,
           perguntas: paraPublicar.perguntas,
           atualizadoEm: paraPublicar.atualizadoEm,
         }),
@@ -1294,12 +1320,32 @@ function App() {
     setRespostasRemotas([])
     setErro('')
     setTela('detalhes')
-    if (conta && formulario.contaId === conta.id) {
+    if (ehDonoDe(formulario)) {
       void requisitarApi(`/api/conta/formularios/${formulario.id}/respostas`)
         .then(setRespostasRemotas).catch((error) => {
           setErro(`Não foi possível carregar as respostas sincronizadas: ${mensagemDeErro(error)}`)
       })
     }
+  }
+
+  async function abrirUrlNotificacao(url) {
+    const destino = typeof url === 'string' ? url : ''
+    const correspondencia = destino.match(/^#\/form\/([A-Z0-9]{8,16})$/i)
+    if (!correspondencia) {
+      setTela('notificacoes')
+      return
+    }
+    const codigo = correspondencia[1].toUpperCase()
+    try {
+      const local = await db.formularios.where('codigo').equals(codigo).first()
+      if (local && conta && local.contaId === conta.id && Array.isArray(local.perguntas) && local.perguntas.length) {
+        abrirDetalhes(local)
+        return
+      }
+    } catch {
+      // Sem cópia local: abre a página pública do formulário.
+    }
+    void abrirFormularioPublico(codigo, true)
   }
 
   function solicitarExclusao(formulario) {
@@ -1526,7 +1572,7 @@ function App() {
     setRespostasRemotas([])
     setErro('')
     setTela('respostas')
-    if (conta && formulario.contaId === conta.id) {
+    if (ehDonoDe(formulario)) {
       try {
         const remotas = await requisitarApi(`/api/conta/formularios/${formulario.id}/respostas`)
         setRespostasRemotas(remotas)
@@ -1654,6 +1700,12 @@ function App() {
           setErro('')
           setTela('perfil')
         }}
+        onNotifications={() => {
+          if (!confirmarSaidaDoEditor()) return
+          setScannerAberto(false)
+          setErro('')
+          setTela('notificacoes')
+        }}
         onLogout={() => void sairDaConta()}
       >
       {(sincronizacoesPendentes > 0 || sincronizacoesRecusadas > 0) && (
@@ -1683,7 +1735,7 @@ function App() {
         </div>
       )}
 
-      {!conta && tela === 'lista' && (
+      {!conta && (tela === 'lista' || tela === 'notificacoes') && (
         <section className="auth-page">
           <div className="auth-card">
             <div className="auth-mark"><img src="/lumys-logo.svg" alt="" /></div>
@@ -1721,6 +1773,10 @@ function App() {
       )}
 
       {tela === 'perfil' && <ProfilePage conta={conta} erro={erro} imagemQr={imagemQrPlataforma} />}
+
+      {conta && tela === 'notificacoes' && (
+        <NotificationsPage erro={erro} onOpenUrl={(url) => void abrirUrlNotificacao(url)} />
+      )}
 
       {tela === 'inicio' && (
         <HomePage
@@ -1815,6 +1871,7 @@ function App() {
             <pre>{`{
   "titulo": "Título do formulário",
   "descricao": "Descrição opcional",
+  "metaRespostas": 10,
   "perguntas": [
     {
       "titulo": "Texto da pergunta",
@@ -1824,7 +1881,7 @@ function App() {
     }
   ]
 }`}</pre>
-            <p>Os campos <code>titulo</code> e <code>descricao</code> do formulário são opcionais. Para perguntas de escala, você pode informar <code>escalaMin</code>, <code>escalaMax</code>, <code>rotuloMin</code> e <code>rotuloMax</code> (padrão: 1 a 5). Para resposta curta, parágrafo ou data, o campo <code>opcoes</code> não é necessário.</p>
+            <p>Os campos <code>titulo</code>, <code>descricao</code> e <code>metaRespostas</code> do formulário são opcionais. A <code>metaRespostas</code> dispara uma notificação quando o questionário atinge aquela quantidade de respostas. Para perguntas de escala, você pode informar <code>escalaMin</code>, <code>escalaMax</code>, <code>rotuloMin</code> e <code>rotuloMax</code> (padrão: 1 a 5). Para resposta curta, parágrafo ou data, o campo <code>opcoes</code> não é necessário.</p>
           </aside>
         </section>
       )}
@@ -1848,6 +1905,27 @@ function App() {
                 <div className="title-accent" />
                 <input className="form-title-input" aria-label="Título do formulário" value={rascunho.titulo} onChange={(event) => void salvarFormulario({ ...rascunho, titulo: event.target.value })} placeholder="Título do formulário" />
                 <textarea className="form-description-input" aria-label="Descrição do formulário" value={rascunho.descricao} onChange={(event) => void salvarFormulario({ ...rascunho, descricao: event.target.value })} placeholder="Descrição do formulário" rows="2" />
+                <div className="form-meta-field">
+                  <label htmlFor="form-meta">Meta de respostas</label>
+                  <input
+                    id="form-meta"
+                    className="form-meta-input"
+                    type="number"
+                    min="1"
+                    max="1000000"
+                    inputMode="numeric"
+                    placeholder="Sem meta"
+                    value={rascunho.metaRespostas ?? ''}
+                    onChange={(event) => {
+                      const texto = event.target.value
+                      const metaRespostas = texto === ''
+                        ? null
+                        : Math.min(Math.max(Math.trunc(Number(texto)) || 1, 1), 1_000_000)
+                      void salvarFormulario({ ...rascunho, metaRespostas })
+                    }}
+                  />
+                  <span className="form-meta-hint">Avisaremos quando o questionário atingir essa quantidade de respostas.</span>
+                </div>
               </section>
               {rascunho.perguntas.map((pergunta, index) => (
                 <section className="editor-card question-card" key={pergunta.id}>
@@ -2060,6 +2138,8 @@ function App() {
           </section>
         </div>
       )}
+
+      {conta && <NotificationPermissionPopup visivel={tela !== 'notificacoes'} />}
 
     </AppLayout>
   )

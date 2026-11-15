@@ -1,6 +1,7 @@
+import SinoNotificacoes from '../components/SinoNotificacoes'
 import './AppLayout.css'
 
-export default function AppLayout({ children, conta, authCarregando, tela, onHome, onList, onProfile, onLogout }) {
+export default function AppLayout({ children, conta, authCarregando, tela, onHome, onList, onProfile, onNotifications, onLogout }) {
   return (
     <main className="app-shell">
       <header className="topbar">
@@ -29,6 +30,7 @@ export default function AppLayout({ children, conta, authCarregando, tela, onHom
               )}
               {conta && (
                 <>
+                  <SinoNotificacoes ativo={tela === 'notificacoes'} onOpen={onNotifications} />
                   <span className="account-email">{conta.email}</span>
                   <button className="account-logout" type="button" onClick={onLogout} aria-label="Sair da conta" title="Sair">
                     <svg viewBox="0 0 24 24" aria-hidden="true">

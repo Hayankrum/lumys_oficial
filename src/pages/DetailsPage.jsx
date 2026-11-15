@@ -23,6 +23,7 @@ export default function DetailsPage({
       ...(todasRespostas ?? []).filter((item) => item.formularioId === formulario.id),
     ].map((item) => item.id)).size,
   )
+  const estaPublicado = Boolean(formulario.publica || formulario.publicada)
 
   return (
     <section className="detail-page">
@@ -57,7 +58,10 @@ export default function DetailsPage({
             <p className="eyebrow">DETALHES DO QUESTIONÁRIO</p>
             <h1>{formulario.titulo || 'Questionário sem título'}</h1>
             <p className="detail-description">{formulario.descricao || 'Este questionário não tem descrição.'}</p>
-            {(ehDono && !formulario.publicada) || (!ehDono && !formulario.publica && !formulario.publicada) ? (
+            {!ehDono && formulario.criadorEmail && (
+              <p className="detail-creator">Criado por <strong>{formulario.criadorEmail}</strong></p>
+            )}
+            {ehDono && !estaPublicado ? (
               <button className="button button--primary detail-answer-button" type="button" onClick={onPublish} disabled={publicando}>
                 {publicando ? 'Publicando…' : 'Publicar formulário'}
               </button>
@@ -70,8 +74,24 @@ export default function DetailsPage({
             <div className="detail-stats">
               <div><strong>{formulario.perguntas.length}</strong><span>{formulario.perguntas.length === 1 ? 'pergunta' : 'perguntas'}</span></div>
               <div><strong>{totalRespostas}</strong><span>respostas recebidas</span></div>
-              <div><strong>{formulario.publicada ? 'Publicado' : 'Rascunho'}</strong><span>{formulario.publicada ? 'visível por código e link' : 'somente neste dispositivo'}</span></div>
+              <div><strong>{estaPublicado ? 'Publicado' : 'Rascunho'}</strong><span>{estaPublicado ? 'visível por código e link' : 'somente neste dispositivo'}</span></div>
             </div>
+            {formulario.metaRespostas ? (
+              <div className={`detail-meta${totalRespostas >= formulario.metaRespostas ? ' detail-meta--reached' : ''}`}>
+                <div className="detail-meta-heading">
+                  <span>Meta de respostas</span>
+                  <strong>{Math.min(totalRespostas, formulario.metaRespostas)} / {formulario.metaRespostas}</strong>
+                </div>
+                <div className="detail-meta-track" aria-hidden="true">
+                  <span style={{ width: `${Math.min(100, (totalRespostas / formulario.metaRespostas) * 100)}%` }} />
+                </div>
+                <p className="detail-meta-status">
+                  {totalRespostas >= formulario.metaRespostas
+                    ? 'Meta atingida! Enviamos uma notificação para você.'
+                    : `Faltam ${formulario.metaRespostas - totalRespostas} ${formulario.metaRespostas - totalRespostas === 1 ? 'resposta' : 'respostas'} para a meta.`}
+                </p>
+              </div>
+            ) : null}
           </section>
 
           {erro && <p className="form-error detail-error" role="alert">{erro}</p>}
@@ -104,7 +124,7 @@ export default function DetailsPage({
           </section>
         </div>
 
-        {formulario.publicada && <aside className="detail-share-card">
+        {estaPublicado && <aside className="detail-share-card">
           <p className="eyebrow">COMPARTILHAMENTO</p>
           <>
             <h2>Compartilhe este formulário</h2>
