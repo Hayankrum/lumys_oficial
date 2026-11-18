@@ -20,6 +20,10 @@ const pool = new pg.Pool({
   connectionTimeoutMillis: 5_000,
 })
 const app = express()
+// A Vercel (e qualquer reverse proxy) preenche X-Forwarded-For. Sem isso o
+// express-rate-limit trata todos os visitantes como o mesmo IP e bloqueia a
+// API inteira depois de algumas tentativas (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR).
+app.set('trust proxy', 1)
 const distPath = resolve(serverDir, '../dist')
 app.use(cors())
 app.use(express.json())
