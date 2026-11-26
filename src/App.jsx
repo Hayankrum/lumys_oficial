@@ -74,6 +74,10 @@ const MODELO_JSON = `{
 }`
 
 function validarFormularioJson(texto) {
+  if (!texto.trim()) {
+    throw new Error('Cole o JSON do formulário para importar. Use o botão "Copiar modelo" para pegar um exemplo.')
+  }
+
   let conteudo
   try {
     conteudo = JSON.parse(texto)
@@ -551,8 +555,9 @@ function App() {
   const [respostaIdPendente, setRespostaIdPendente] = useState(null)
   const [respostasRemotas, setRespostasRemotas] = useState([])
   const [erro, setErro] = useState('')
-  const [jsonConteudo, setJsonConteudo] = useState(MODELO_JSON)
+  const [jsonConteudo, setJsonConteudo] = useState('')
   const [jsonErro, setJsonErro] = useState('')
+  const [jsonCopiado, setJsonCopiado] = useState(false)
   const [jsonAberto, setJsonAberto] = useState(false)
   const [mensagemPartilha, setMensagemPartilha] = useState('')
   const [imagemQr, setImagemQr] = useState('')
@@ -1282,9 +1287,34 @@ function App() {
     }
   }
 
-  function abrirJson() {
-    setJsonConteudo(MODELO_JSON)
+  async function copiarModeloJson() {
     setJsonErro('')
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(MODELO_JSON)
+      } else {
+        const area = document.createElement('textarea')
+        area.value = MODELO_JSON
+        area.setAttribute('readonly', '')
+        area.style.position = 'fixed'
+        area.style.top = '-1000px'
+        document.body.appendChild(area)
+        area.select()
+        const copiado = document.execCommand('copy')
+        document.body.removeChild(area)
+        if (!copiado) throw new Error('Não foi possível copiar o modelo.')
+      }
+      setJsonCopiado(true)
+      window.setTimeout(() => setJsonCopiado(false), 2500)
+    } catch {
+      setJsonErro('Não foi possível copiar o modelo. Tente novamente.')
+    }
+  }
+
+  function abrirJson() {
+    setJsonConteudo('')
+    setJsonErro('')
+    setJsonCopiado(false)
     setJsonAberto(true)
   }
 
@@ -1845,7 +1875,6 @@ function App() {
           <form className="json-form" onSubmit={(event) => void criarFormularioDoJson(event)}>
             <div className="json-editor-heading">
               <label htmlFor="form-json">Estrutura do formulário</label>
-              <button className="json-reset" type="button" onClick={() => { setJsonConteudo(MODELO_JSON); setJsonErro('') }}>Restaurar exemplo</button>
             </div>
             <textarea
               id="form-json"
@@ -1862,6 +1891,9 @@ function App() {
               <p className="json-warning">As perguntas atuais serão substituídas. As respostas já recebidas serão mantidas, mas podem não corresponder às novas perguntas.</p>
             )}
             <div className="json-actions">
+              <button className="button button--quiet" type="button" onClick={() => void copiarModeloJson()}>
+                {jsonCopiado ? 'Modelo copiado!' : 'Copiar modelo'}
+              </button>
               <button className="button button--quiet" type="button" onClick={() => jsonModo === 'substituir' ? setTela('editar') : abrirLista()}>Cancelar</button>
               <button className="button button--primary" type="submit">{jsonModo === 'substituir' ? 'Importar para este formulário' : 'Criar formulário'}</button>
             </div>
@@ -2119,19 +2151,32 @@ function App() {
               <button className="json-modal-close" type="button" aria-label="Fechar" onClick={() => setJsonAberto(false)}>×</button>
             </div>
             <form onSubmit={(event) => void criarFormularioDoJson(event)}>
+              <div className="json-editor-heading">
+                <label htmlFor="json-modal-textarea">Estrutura do formulário</label>
+              </div>
               <textarea
+                id="json-modal-textarea"
                 className="json-textarea"
-                aria-label="JSON do formulário"
                 placeholder="Cole aqui o JSON do formulário"
                 spellCheck="false"
                 value={jsonConteudo}
                 onChange={(event) => { setJsonConteudo(event.target.value); setJsonErro('') }}
-                aria-describedby={jsonErro ? 'json-error' : undefined}
+                aria-describedby={jsonErro ? 'json-error' : 'json-modal-help'}
                 autoFocus
               />
-              {jsonErro && <p className="json-error" id="json-error" role="alert">{jsonErro}</p>}
+              {jsonErro
+                ? <p className="json-error" id="json-error" role="alert">{jsonErro}</p>
+                : (
+                  <p className="json-help" id="json-modal-help" role={jsonCopiado ? 'status' : undefined}>
+                    {jsonCopiado
+                      ? 'Modelo copiado! Cole o JSON no campo acima e edite como precisar.'
+                      : 'O campo começa vazio. Use "Copiar modelo" para pegar um exemplo completo.'}
+                  </p>
+                )}
               <div className="json-actions">
-                <button className="button button--quiet" type="button" onClick={() => setJsonAberto(false)}>Cancelar</button>
+                <button className="button button--quiet" type="button" onClick={() => void copiarModeloJson()}>
+                  {jsonCopiado ? 'Modelo copiado!' : 'Copiar modelo'}
+                </button>
                 <button className="button button--primary" type="submit">Importar</button>
               </div>
             </form>

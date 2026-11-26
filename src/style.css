@@ -26,6 +26,17 @@ html, body, #root {
   background-color: #f0f7f3;
 }
 
+/* Evita o zoom automático do iOS/Safari ao girar a tela ou dar toque duplo. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  touch-action: manipulation;
+}
+
+button, a, input, textarea, select, label {
+  touch-action: manipulation;
+}
+
 body {
   min-width: 320px;
   min-height: 100vh;
@@ -279,10 +290,14 @@ h1, h2, h3 { font-family: Manrope, 'Segoe UI', sans-serif; }
 .json-modal-heading h2 { margin: 0; font-size: 17px; }
 .json-modal-close { display: grid; width: 32px; height: 32px; place-items: center; border: 0; border-radius: 7px; background: transparent; color: #78808d; font-size: 22px; cursor: pointer; }
 .json-modal-close:hover { background: #f2f2f5; color: var(--ink); }
+.json-editor-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
+.json-editor-heading label { color: #535b68; font-size: 12px; font-weight: 600; }
+.json-help { margin: 8px 0 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.json-warning { margin: 8px 0 0; color: #9a5b32; font-size: 11px; line-height: 1.5; }
 .json-textarea { display: block; width: 100%; min-height: 220px; max-height: 55vh; margin: 0; padding: 12px; overflow: auto; border: 1px solid #dfe1e6; border-radius: 8px; background: #f8f8fb; color: #343947; font-family: 'SFMono-Regular', Consolas, monospace; font-size: 11px; line-height: 1.55; tab-size: 2; }
 .json-textarea { resize: vertical; }
 .json-error { color: #b93831; }
-.json-actions { display: flex; justify-content: flex-end; gap: 9px; margin-top: 14px; }
+.json-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 9px; margin-top: 14px; }
 .confirm-modal { width: min(440px, 100%); padding: 24px; }
 .confirm-modal-icon { display: grid; width: 42px; height: 42px; place-items: center; margin: 0 auto 14px; border-radius: 12px; background: #fff0ef; color: #b93831; }
 .confirm-modal-icon svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.7; }
@@ -591,4 +606,17 @@ select.answer-input { border: 1px solid #dfe1e6; border-radius: 7px; padding: 9p
   .form-meta-field { grid-template-columns: minmax(0, 1fr); }
   .notification-banner { align-items: flex-start; flex-wrap: wrap; }
   .notification-banner-text { flex: 1 1 100%; }
+}
+
+/*
+ * O iOS/Safari aplica zoom automático ao focar campos com font-size menor que
+ * 16px. Em telas de toque, garantimos esse mínimo nos campos editáveis,
+ * preservando os títulos (que já são maiores) e os controles de marcação.
+ */
+@media (any-pointer: coarse) {
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not(.form-title-input):not(.question-title-input),
+  textarea:not(.form-title-input):not(.question-title-input),
+  select:not([multiple]) {
+    font-size: 16px;
+  }
 }
