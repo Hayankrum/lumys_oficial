@@ -19,3 +19,6 @@ document.addEventListener('visibilitychange', () => {
 })
 setInterval(sincronizar, 30_000)
 sincronizar()
+
+
+
