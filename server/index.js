@@ -192,9 +192,17 @@ app.get('/api/conta/formularios', autenticar, async (req, res) => {
            where respostas_conta.conta_id = formularios_conta.conta_id
              and respostas_conta.formulario_id = formularios_conta.id) +
           (select count(*) from respostas_publicas
-           where respostas_publicas.formulario_codigo = formularios_conta.formulario->>'codigo')) as respostas_count
+           join formularios_publicos on formularios_publicos.codigo = respostas_publicas.formulario_codigo
+           where formularios_publicos.conta_id = formularios_conta.conta_id
+             and respostas_publicas.formulario_codigo = formularios_conta.formulario->>'codigo')) as respostas_count
        from formularios_conta
        where formularios_conta.conta_id = $1
+         and not exists (
+           select 1 from formularios_publicos
+           where formularios_publicos.codigo = formularios_conta.formulario->>'codigo'
+             and formularios_publicos.conta_id is not null
+             and formularios_publicos.conta_id <> formularios_conta.conta_id
+         )
        order by formularios_conta.atualizado_em desc`,
       [req.conta.id]
     )
@@ -229,8 +237,8 @@ app.get('/api/conta/respostas', autenticar, async (req, res) => {
        select respostas_publicas.id, respostas_publicas.formulario_id,
               respostas_publicas.respostas, respostas_publicas.criado_em
        from respostas_publicas
-       join formularios_conta on formularios_conta.conta_id = $1
-         and respostas_publicas.formulario_codigo = formularios_conta.formulario->>'codigo'
+       join formularios_publicos on formularios_publicos.codigo = respostas_publicas.formulario_codigo
+       where formularios_publicos.conta_id = $1
        union
        select respostas_publicas.id, respostas_publicas.formulario_id,
               respostas_publicas.respostas, respostas_publicas.criado_em
@@ -300,13 +308,27 @@ app.put('/api/conta/formularios/:id', autenticar, async (req, res) => {
         (!Number.isSafeInteger(formulario.metaRespostas) || formulario.metaRespostas < 1 || formulario.metaRespostas > 1_000_000))) {
     return res.status(400).json({ erro: 'Dados inválidos para sincronizar o formulário.' })
   }
+  const codigoFormulario = typeof formulario.codigo === 'string' ? formulario.codigo.toUpperCase() : ''
   try {
+    // Uma conta nunca deve guardar uma cópia de um formulário público que
+    // pertence a outra conta. Sem esta verificação, abrir um formulário
+    // público para responder podia "adotá-lo" na conta do respondente e
+    // expor as respostas de outra pessoa.
+    if (codigoFormulario) {
+      const publico = await pool.query(
+        'select conta_id from formularios_publicos where codigo = $1',
+        [codigoFormulario]
+      )
+      if (publico.rowCount && publico.rows[0].conta_id && publico.rows[0].conta_id !== req.conta.id) {
+        return res.json({ ok: true, ignorado: true, motivo: 'formulario_publico_de_outra_conta' })
+      }
+    }
     const excluido = await pool.query(
       `select 1 from formularios_conta_excluidos where conta_id = $1 and id = $2
        union all
        select 1 from formularios_publicos_excluidos where codigo = $3
        limit 1`,
-      [req.conta.id, req.params.id, typeof formulario.codigo === 'string' ? formulario.codigo : '']
+      [req.conta.id, req.params.id, codigoFormulario]
     )
     if (excluido.rowCount) {
       return res.status(409).json({
@@ -370,6 +392,8 @@ app.get('/api/conta/formularios/:id/respostas', autenticar, async (req, res) => 
        join formularios_conta on formularios_conta.conta_id = $1
          and formularios_conta.id = $2
          and respostas_publicas.formulario_codigo = formularios_conta.formulario->>'codigo'
+       join formularios_publicos on formularios_publicos.codigo = respostas_publicas.formulario_codigo
+         and formularios_publicos.conta_id = formularios_conta.conta_id
        order by criado_em desc`,
       [req.conta.id, req.params.id]
     )

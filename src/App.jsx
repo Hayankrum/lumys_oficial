@@ -373,19 +373,39 @@ async function sincronizarFormulariosDaConta(conta) {
   }
 
   const locais = await db.formularios.toArray()
-  const daConta = locais.filter((formulario) => !formulario.contaId || formulario.contaId === conta.id)
+  // Formulários sem contaId só podem ser adotados se forem realmente do
+  // usuário (criados localmente com token). Formulários públicos abertos
+  // apenas para responder ficam de fora.
+  const daConta = locais.filter((formulario) =>
+    formulario.contaId === conta.id ||
+    (!formulario.contaId && !formulario.publica && Boolean(formulario.tokenProprietario)),
+  )
   const porIdRemoto = new Map(remotos.map((formulario) => [formulario.id, formulario]))
   const idsExcluidos = new Set(porIdExcluido.keys())
+
+  async function removerCopiaLocal(formularioId) {
+    await db.transaction('rw', db.formularios, db.respostas, async () => {
+      await db.formularios.delete(formularioId)
+      await db.respostas.where('formularioId').equals(formularioId).delete()
+    })
+  }
 
   for (const local of daConta) {
     if (idsExcluidos.has(local.id)) continue
     const formularioLocal = { ...local, contaId: conta.id }
     const remoto = porIdRemoto.get(local.id)
     if (!remoto || formularioLocal.atualizadoEm > remoto.atualizadoEm) {
-      await requisitarApi(`/api/conta/formularios/${formularioLocal.id}`, {
+      const resultado = await requisitarApi(`/api/conta/formularios/${formularioLocal.id}`, {
         method: 'PUT',
         body: JSON.stringify({ formulario: formularioLocal }),
       })
+      // O servidor recusou guardar uma cópia de formulário público de outra
+      // conta. Remove apenas a cópia local; o formulário original e as
+      // respostas dele continuam intactos.
+      if (resultado?.ignorado) {
+        await removerCopiaLocal(local.id)
+        continue
+      }
       await db.formularios.put(formularioLocal)
     } else {
       await db.formularios.put({ ...remoto, contaId: conta.id })
@@ -607,7 +627,12 @@ function App() {
   const sincronizacoesRecusadas = filaDaConta.filter((item) => item.bloqueada).length
   const erroSincronizacaoRecusada = filaDaConta.find((item) => item.bloqueada)?.ultimoErro
   const formulariosDaConta = conta
-    ? (formularios ?? []).filter((formulario) => formulario.contaId === conta.id)
+    ? (formularios ?? []).filter((formulario) =>
+        formulario.contaId === conta.id &&
+        // Cópias de formulários públicos de outras contas não pertencem ao
+        // usuário, mesmo que tenham sido gravadas localmente no passado.
+        !(formulario.publica && !formulario.tokenProprietario),
+      )
     : []
   const respostasDoFormulario = useLiveQuery(
     () => formularioAtivo
@@ -622,8 +647,9 @@ function App() {
   const contaId = conta?.id
   const ehDonoDe = (formulario) => Boolean(
     conta && formulario &&
-    (formulario.contaId === conta.id ||
-      (formulariosDaConta ?? []).some((item) => item.id === formulario.id)),
+    formulario.contaId === conta.id &&
+    !(formulario.publica && !formulario.tokenProprietario) &&
+    (formulariosDaConta ?? []).some((item) => item.id === formulario.id),
   )
   const ehDonoDoFormularioAtivo = ehDonoDe(formularioAtivo)
   useEffect(() => {
@@ -837,11 +863,15 @@ function App() {
       if (operacao !== numeroRestauracaoHistorico.current) return
       const local = await db.formularios.where('codigo').equals(codigoNormalizado).first()
       if (operacao !== numeroRestauracaoHistorico.current) return
+      // Só preserva o vínculo com a conta quando a cópia local realmente
+      // pertence ao usuário (tem token de proprietário). Um formulário público
+      // aberto apenas para responder não pode virar "meu formulário".
+      const pertenceAoUsuario = Boolean(local?.tokenProprietario)
       const formularioEmCache = {
         ...local,
         ...formulario,
-        contaId: local?.contaId,
-        tokenProprietario: local?.tokenProprietario,
+        contaId: pertenceAoUsuario ? local.contaId : undefined,
+        tokenProprietario: pertenceAoUsuario ? local.tokenProprietario : undefined,
         publicada: true,
         publica: true,
       }
